@@ -24,6 +24,9 @@ fn main() {
                     error::ServerError::IoErr(e)=>{
 
                     }
+                    _=>{
+
+                    }
                 }
             }
         }
@@ -37,25 +40,26 @@ fn main() {
             return;
         }
     }
-    //client
-    thread::spawn(||{
-        match client::init::Init() {
-            Ok(())=>{
+    
 
-            }
-            Err(e)=>{
-                match e {
-                    IoErr(e)=>{
+    match client::init::Init() {
+        Ok(())=>{
 
-                    }
-                    EnvErr(e)=>{
+        }
+        Err(e)=>{
+            match e {
+                IoErr(e)=>{
 
-                    }
+                }
+                EnvErr(e)=>{
+
+                }
+                _=>{
+                        
                 }
             }
         }
-    });
-
+    }
 
     
 }

@@ -1,8 +1,11 @@
+use std::fmt::write;
+
 
 #[derive(Debug)]
 pub enum ServerError{
     EnvErr(std::env::VarError),
     IoErr(std::io::Error),
+    NoRedisKey(String)
 }
 impl std::error::Error for ServerError {}
 
@@ -23,6 +26,7 @@ impl std::fmt::Display for ServerError {
         match self {
             ServerError::EnvErr(e) => write!(f, "Env_err : {}", e),
             ServerError::IoErr(e) => write!(f, "io_err : {}", e),
+            ServerError::NoRedisKey(e)=>write!(f, "NoRedisKey : {}", e)
         }
     }
 }
