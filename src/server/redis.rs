@@ -467,14 +467,6 @@ use crate::{error::ServerError, server::persistenc::Persistence};
 //     }
 
 // }
-
-impl Persistence for RedisServer  {
-    
-}
-
-
-
-
 pub enum RedisValue {
     String(RedisString),
     List(RedisList),
@@ -482,25 +474,15 @@ pub enum RedisValue {
     Set(RedisSet),
 }
 
-pub struct RedisServer {
-    pub data: HashMap<Vec<u8>, RedisValue>,
-}
+pub struct RedisServer {pub data: HashMap<Vec<u8>, RedisValue>,}
 
-pub struct RedisString {
-    data: Vec<u8>,
-}
+pub struct RedisString {data: Vec<u8>,}
 
-pub struct RedisList {
-    data: Vec<Vec<u8>>,
-}
+pub struct RedisList {data: Vec<Vec<u8>>}
 
-pub struct RedisHash {
-    data: HashMap<Vec<u8>, Vec<u8>>,
-}
+pub struct RedisHash {data: HashMap<Vec<u8>, Vec<u8>>}
 
-pub struct RedisSet {
-    data: HashSet<Vec<u8>>,
-}
+pub struct RedisSet {data: HashSet<Vec<u8>>}
 
 //
 // ---------------- RedisServer ----------------
@@ -692,4 +674,63 @@ impl RedisSet {
     pub fn values(&self) -> Vec<Vec<u8>> {
         self.data.iter().cloned().collect()
     }
+}
+
+
+impl Persistence for RedisServer  {
+    fn SaveSnapShot(&self) {
+        
+
+        for (key,redis_value)in &self.data{
+            let key_len=key.len().to_be_bytes();
+            
+            let value_len;
+            match redis_value {
+                RedisValue::String(s)=>{
+                    let value;
+                    (value,value_len)=GetStringSnapshot(s);
+                }
+                RedisValue::List(l)=>{
+                    let value;
+                    (value,value_len)=GetListSnapshot(l);
+                }
+                RedisValue::Hash(h)=>{
+                    let value;
+                    (value,value_len)=GetHashSnapshot(h);
+                }
+                RedisValue::Set(s)=>{
+                    let value;
+                    (value,value_len)=GetSetSnapShot(s);
+                }
+                _=>{
+
+                }
+            }
+
+        }
+    }
+}
+
+fn GetStringSnapshot(redis_string:&RedisString)->(&[u8],[u8;8]){
+    let value=redis_string.get();
+    let value_len=value.len().to_be_bytes();
+    (value,value_len)
+}
+
+fn GetListSnapshot(redis_list:&RedisList)->(&Vec<Vec<u8>>,[u8;8]){
+    let value=&redis_list.data;
+    let value_len=value.len().to_be_bytes();
+    (value,value_len)
+}
+
+fn GetHashSnapshot(redis_hash:&RedisHash)->(&HashMap<Vec<u8>, Vec<u8>>,[u8;8]){
+    let value=&redis_hash.data;
+    let value_len=value.len().to_be_bytes();
+    (value,value_len)
+}
+
+fn GetSetSnapShot(redis_set:&RedisSet)->(&HashSet<Vec<u8>>,[u8;8]){
+    let value=&redis_set.data;
+    let value_len=value.len().to_be_bytes();
+    (value,value_len)
 }

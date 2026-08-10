@@ -3,7 +3,7 @@ use std::{ sync::{Arc, Mutex}};
 
 use tokio::{io::AsyncReadExt, net::{TcpListener, TcpStream}};
 
-use crate::{error::ServerError, server::redis::{self, RedisList, RedisServer, RedisString, RedisValue}};
+use crate::{error::ServerError, server::redis::{self, RedisHash, RedisList, RedisServer, RedisSet, RedisString, RedisValue}};
 
 
 
@@ -182,6 +182,78 @@ fn HandleListOp(redis:&Arc<Mutex<RedisServer>>,command:String,t:String){
             redis_list.push_back(value);
             
         }
+        "lpop"=>{
+            let key=command.remove(1);
+            
+            let mut redis= redis.lock().unwrap();
+            
+            let redis_value=redis.data.get_mut(&key).unwrap();
+
+            let redis_list=GetRedisList(redis_value).unwrap();
+
+            redis_list.pop_front();
+        }
+        "rpop"=>{
+            let key=command.remove(1);
+            
+            let mut redis= redis.lock().unwrap();
+            
+            let redis_value=redis.data.get_mut(&key).unwrap();
+
+            let redis_list=GetRedisList(redis_value).unwrap();
+
+            redis_list.pop_back();
+        }
+        "llen"=>{
+            let key=command.remove(1);
+            
+            let mut redis= redis.lock().unwrap();
+            
+            let redis_value=redis.data.get_mut(&key).unwrap();
+
+            let redis_list=GetRedisList(redis_value).unwrap();
+
+            let lem=redis_list.len();            
+        }
+        "lindex"=>{
+            let key=command.remove(1);
+            let value=command.remove(1);
+            let mut redis= redis.lock().unwrap();
+            
+            let redis_value=redis.data.get_mut(&key).unwrap();
+
+            let redis_list=GetRedisList(redis_value).unwrap();
+            
+            let index=String::from_utf8(value).unwrap().parse().unwrap();
+            let element=redis_list.get(index);
+        }
+        "lset"=>{
+            let key=command.remove(1);
+            let value_index=command.remove(1);
+            let new_value=command.remove(1);
+
+            let mut redis= redis.lock().unwrap();
+            
+            let redis_value=redis.data.get_mut(&key).unwrap();
+
+            let redis_list=GetRedisList(redis_value).unwrap();
+            
+            let index=String::from_utf8(value_index).unwrap().parse().unwrap();
+            redis_list.set(index, new_value);
+        }
+        "lclear"=>{
+            let key=command.remove(1);
+            
+            let mut redis= redis.lock().unwrap();
+            
+            let redis_value=redis.data.get_mut(&key).unwrap();
+
+            let redis_list=GetRedisList(redis_value).unwrap();
+            
+            redis_list.clear();
+
+        }
+
         _=>{
 
         }
@@ -191,6 +263,254 @@ fn HandleListOp(redis:&Arc<Mutex<RedisServer>>,command:String,t:String){
 fn GetRedisList(value: &mut RedisValue,) -> Option<&mut RedisList> {
     match value {
         RedisValue::List(list) => Some(list),
+        _ => None,
+    }
+}
+
+
+
+fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>, command: String, t: String) {
+    let mut command: Vec<Vec<u8>> = command
+        .split_whitespace()
+        .map(|word| word.as_bytes().to_vec())
+        .collect();
+
+    match std::str::from_utf8(&command[0]).unwrap() {
+        "hcreate" => {
+            let key = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+            redis.create_hash(key);
+        }
+
+        "hset" => {
+            let key = command.remove(1);
+            let field = command.remove(1);
+            let value = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get_mut(&key).unwrap();
+
+            let redis_hash = GetRedisHash(redis_value).unwrap();
+
+            redis_hash.set(field, value);
+        }
+
+        "hget" => {
+            let key = command.remove(1);
+            let field = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_hash = GetRedisHashRef(redis_value).unwrap();
+
+            let value = redis_hash.get(&field);
+        }
+
+        "hexists" => {
+            let key = command.remove(1);
+            let field = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_hash = GetRedisHashRef(redis_value).unwrap();
+
+            let exists = redis_hash.exists(&field);
+        }
+
+        "hdel" => {
+            let key = command.remove(1);
+            let field = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get_mut(&key).unwrap();
+
+            let redis_hash = GetRedisHash(redis_value).unwrap();
+
+            redis_hash.remove(&field);
+        }
+
+        "hlen" => {
+            let key = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_hash = GetRedisHashRef(redis_value).unwrap();
+
+            let len = redis_hash.len();
+        }
+
+        "hclear" => {
+            let key = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get_mut(&key).unwrap();
+
+            let redis_hash = GetRedisHash(redis_value).unwrap();
+
+            redis_hash.clear();
+        }
+
+        "hkeys" => {
+            let key = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_hash = GetRedisHashRef(redis_value).unwrap();
+
+            let keys = redis_hash.keys();
+        }
+
+        "hvalues" => {
+            let key = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_hash = GetRedisHashRef(redis_value).unwrap();
+
+            let values = redis_hash.values();
+        }
+
+        _ => {
+
+        }
+    }
+}
+
+fn GetRedisHash(value: &mut RedisValue) -> Option<&mut RedisHash> {
+    match value {
+        RedisValue::Hash(hash) => Some(hash),
+        _ => None,
+    }
+}
+
+fn GetRedisHashRef(value: &RedisValue) -> Option<&RedisHash> {
+    match value {
+        RedisValue::Hash(hash) => Some(hash),
+        _ => None,
+    }
+}
+
+
+
+fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>, command: String, t: String) {
+    let mut command: Vec<Vec<u8>> = command
+        .split_whitespace()
+        .map(|word| word.as_bytes().to_vec())
+        .collect();
+
+    match std::str::from_utf8(&command[0]).unwrap() {
+        "screate" => {
+            let key = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+            redis.create_set(key);
+        }
+
+        "sadd" => {
+            let key = command.remove(1);
+            let value = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get_mut(&key).unwrap();
+
+            let redis_set = GetRedisSet(redis_value).unwrap();
+
+            redis_set.add(value);
+        }
+
+        "srem" => {
+            let key = command.remove(1);
+            let value = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get_mut(&key).unwrap();
+
+            let redis_set = GetRedisSet(redis_value).unwrap();
+
+            redis_set.remove(&value);
+        }
+
+        "scontains" => {
+            let key = command.remove(1);
+            let value = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_set = GetRedisSetRef(redis_value).unwrap();
+
+            let contains = redis_set.contains(&value);
+        }
+
+        "slen" => {
+            let key = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_set = GetRedisSetRef(redis_value).unwrap();
+
+            let len = redis_set.len();
+        }
+
+        "sclear" => {
+            let key = command.remove(1);
+
+            let mut redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get_mut(&key).unwrap();
+
+            let redis_set = GetRedisSet(redis_value).unwrap();
+
+            redis_set.clear();
+        }
+
+        "svalues" => {
+            let key = command.remove(1);
+
+            let redis = redis.lock().unwrap();
+
+            let redis_value = redis.data.get(&key).unwrap();
+
+            let redis_set = GetRedisSetRef(redis_value).unwrap();
+
+            let values = redis_set.values();
+        }
+
+        _ => {
+
+        }
+    }
+}
+
+fn GetRedisSet(value: &mut RedisValue) -> Option<&mut RedisSet> {
+    match value {
+        RedisValue::Set(set) => Some(set),
+        _ => None,
+    }
+}
+
+fn GetRedisSetRef(value: &RedisValue) -> Option<&RedisSet> {
+    match value {
+        RedisValue::Set(set) => Some(set),
         _ => None,
     }
 }

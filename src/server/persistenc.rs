@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs::OpenOptions};
 
-use crate::server::redis::{RedisString, RedisValue};
+use crate::server::redis::{RedisHash, RedisList, RedisSet, RedisString, RedisValue};
 
 
 
@@ -10,7 +10,6 @@ pub trait Persistence {
     fn WriteToLog(&self,command:String,args:&[String]) {
         let content = format!("{} {}", command,args.join(" "));
         let file=std::fs::write("redis.log", content).unwrap();
-        
     }
     fn ReadLog()->String {
         let mut file=create_if_not_exists("refis.log").unwrap();
@@ -31,8 +30,173 @@ pub trait Persistence {
 
                     map.insert(key, value);
                 }
-                "get"=>{
-                    
+                "get"=>{}
+                "append"=>{
+                    let key=commands[1].as_bytes().to_vec();
+                    let value=RedisValue::String(RedisString::new(commands[2].as_bytes().to_vec()) ) ;
+
+                    map.insert(key, value);
+                }
+                "len"=>{
+
+                }
+
+
+                "lcreate"=>{
+                    let key=commands[1].as_bytes().to_vec();
+                    let empty_list=RedisValue::List(RedisList::new());
+
+                    map.insert(key, empty_list);
+                }
+                "lpush"=>{
+                    let key=commands[1].as_bytes().to_vec();
+                    let value=commands[2].as_bytes().to_vec();
+
+                    let redis_value=map.get_mut(&key).unwrap();
+
+                    match redis_value {
+                        RedisValue::List(redis_list)=>{
+                            redis_list.push_front(value);
+                        }
+                        _=>{}
+                    }
+                }
+                "rpush"=>{
+                    let key=commands[1].as_bytes().to_vec();
+                    let value=commands[2].as_bytes().to_vec();
+
+                    let redis_value=map.get_mut(&key).unwrap();
+
+                    match redis_value {
+                        RedisValue::List(redis_list)=>{
+                            redis_list.push_back(value);
+                        }
+                        _=>{}
+                    }
+                }
+                "lpop" => {
+                    let key = commands[1].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::List(redis_list) = redis_value {
+                        redis_list.pop_front();
+                    }
+                }
+
+                "rpop" => {
+                    let key = commands[1].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::List(redis_list) = redis_value {
+                        redis_list.pop_back();
+                    }
+                }
+
+                "lset" => {
+                    let key = commands[1].as_bytes().to_vec();
+                    let index: usize = commands[2].parse().unwrap();
+                    let value = commands[3].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::List(redis_list) = redis_value {
+                        redis_list.set(index, value);
+                    }
+                }
+
+                "lclear" => {
+                    let key = commands[1].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::List(redis_list) = redis_value {
+                        redis_list.clear();
+                    }
+                }
+
+                "hcreate" => {
+                    let key = commands[1].as_bytes().to_vec();
+
+                    map.insert(
+                        key,
+                        RedisValue::Hash(RedisHash::new())
+                    );
+                }
+
+                "hset" => {
+                    let key = commands[1].as_bytes().to_vec();
+                    let field = commands[2].as_bytes().to_vec();
+                    let value = commands[3].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::Hash(redis_hash) = redis_value {
+                        redis_hash.set(field, value);
+                    }
+                }
+
+                "hdel" => {
+                    let key = commands[1].as_bytes().to_vec();
+                    let field = commands[2].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::Hash(redis_hash) = redis_value {
+                        redis_hash.remove(&field);
+                    }
+                }
+
+                "hclear" => {
+                    let key = commands[1].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::Hash(redis_hash) = redis_value {
+                        redis_hash.clear();
+                    }
+                }
+
+                "screate" => {
+                    let key = commands[1].as_bytes().to_vec();
+
+                    map.insert(
+                        key,
+                        RedisValue::Set(RedisSet::new())
+                    );
+                }
+
+                "sadd" => {
+                    let key = commands[1].as_bytes().to_vec();
+                    let value = commands[2].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::Set(redis_set) = redis_value {
+                        redis_set.add(value);
+                    }
+                }
+
+                "srem" => {
+                    let key = commands[1].as_bytes().to_vec();
+                    let value = commands[2].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::Set(redis_set) = redis_value {
+                        redis_set.remove(&value);
+                    }
+                }
+
+                "sclear" => {
+                    let key = commands[1].as_bytes().to_vec();
+
+                    let redis_value = map.get_mut(&key).unwrap();
+
+                    if let RedisValue::Set(redis_set) = redis_value {
+                        redis_set.clear();
+                    }
                 }
                 _=>{
                 
@@ -47,9 +211,7 @@ pub trait Persistence {
 
     }
 
-    fn SaveSnapShot(){
-
-    }
+    fn SaveSnapShot(& self);
 
     fn ReadSnapShot(){
 
@@ -64,3 +226,4 @@ fn create_if_not_exists(path: &str) -> Result<std::fs::File,Box<dyn std::error::
 
     Ok(file)
 }
+
