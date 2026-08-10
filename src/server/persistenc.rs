@@ -1,5 +1,9 @@
 use std::{collections::HashMap, fs::OpenOptions};
 
+use crate::server::redis::{RedisString, RedisValue};
+
+
+
 
 
 pub trait Persistence {
@@ -15,7 +19,7 @@ pub trait Persistence {
         content
     }
 
-    fn ReconstructLogFile(content:String)->HashMap<Vec<u8>,Vec<u8>>{
+    fn ReconstructLogFile(content:String)->HashMap<Vec<u8>,RedisValue>{
         let mut map=HashMap::new();
 
         for operation in content.lines(){
@@ -23,11 +27,13 @@ pub trait Persistence {
             match commands[0] {
                 "set"=>{
                     let key=commands[1].as_bytes().to_vec();
-                    let value=commands[2].as_bytes().to_vec();
+                    let value=RedisValue::String(RedisString::new(commands[2].as_bytes().to_vec()) ) ;
 
                     map.insert(key, value);
                 }
-                "get"=>{}
+                "get"=>{
+                    
+                }
                 _=>{
                 
                 }

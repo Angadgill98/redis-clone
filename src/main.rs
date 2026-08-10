@@ -5,14 +5,15 @@ use crate::error::ServerError::{self, EnvErr, IoErr};
 mod server;
 pub mod error;
 mod client;
-fn main() {
+
+
+#[tokio::main]
+async fn main() {
     println!("Hello, world!");
 
-    let (tx,tr)=std::sync::mpsc::channel::<u8>();
-
     //server setup
-    thread::spawn(move||{
-        match server::init::Init(tx) {
+    tokio::spawn(async {
+        match server::init::Init().await {
             Ok(())=>{
 
             }
@@ -31,15 +32,8 @@ fn main() {
             }
         }
     });
-    let isup=tr.recv().unwrap();
-    match isup {
-        1=>{
 
-        }
-        _=>{
-            return;
-        }
-    }
+  
     
 
     match client::init::Init() {
