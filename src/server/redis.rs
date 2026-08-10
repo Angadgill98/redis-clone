@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use core::hash;
+use std::{collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Write}};
 
 use crate::{error::ServerError, server::persistenc::Persistence};
 
@@ -594,6 +595,11 @@ impl RedisList {
     pub fn clear(&mut self) {
         self.data.clear();
     }
+
+    //reconstruction
+    pub fn replace(&mut self, data: Vec<Vec<u8>>) {
+        self.data = data;
+    }
 }
 
 //
@@ -638,6 +644,11 @@ impl RedisHash {
     pub fn values(&self) -> Vec<Vec<u8>> {
         self.data.values().cloned().collect()
     }
+
+    //Reconstruction
+    pub fn replace(&mut self, data: HashMap<Vec<u8>, Vec<u8>>) {
+        self.data = data;
+    }
 }
 
 //
@@ -674,33 +685,44 @@ impl RedisSet {
     pub fn values(&self) -> Vec<Vec<u8>> {
         self.data.iter().cloned().collect()
     }
+
+    //reconstruction
+    pub fn replace(&mut self, data: HashSet<Vec<u8>>) {
+        self.data = data;
+    }
 }
 
 
 impl Persistence for RedisServer  {
     fn SaveSnapShot(&self) {
-        
-
         for (key,redis_value)in &self.data{
-            let key_len=key.len().to_be_bytes();
+            let key_len=key.len().to_be_bytes().to_vec();
             
             let value_len;
             match redis_value {
                 RedisValue::String(s)=>{
-                    let value;
-                    (value,value_len)=GetStringSnapshot(s);
+                    let value: &[u8];
+                    (value,value_len)=SetStringSnapshot(s);
+                    let t="string".as_bytes();
+                    SaveStringSnapShot(key, &key_len, &t.to_vec(), &value.to_vec(), &value_len.to_vec());
                 }
                 RedisValue::List(l)=>{
-                    let value;
-                    (value,value_len)=GetListSnapshot(l);
+                    let value: &Vec<Vec<u8>>;
+                    let t="list".as_bytes();
+                    (value,value_len)=SetListSnapshot(l);
+                    SaveListSnapShot(key, &key_len, &t.to_vec(), value, &value_len.to_vec());
                 }
                 RedisValue::Hash(h)=>{
-                    let value;
-                    (value,value_len)=GetHashSnapshot(h);
+                    let value:&HashMap<Vec<u8>, Vec<u8>>;
+                    let t="hash".as_bytes();
+                    (value,value_len)=SetHashSnapshot(h);
+                    SaveHashSnapshot(key, &key_len, &t.to_vec(), value, &value_len.to_vec());
                 }
                 RedisValue::Set(s)=>{
-                    let value;
-                    (value,value_len)=GetSetSnapShot(s);
+                    let value: &HashSet<Vec<u8>>;
+                    let t="set".as_bytes();
+                    (value,value_len)=SetSetSnapShot(s);
+                    SaveSetSnapShot(key, &key_len, &t.to_vec(), value, &value_len.to_vec());
                 }
                 _=>{
 
@@ -709,28 +731,347 @@ impl Persistence for RedisServer  {
 
         }
     }
+
+    fn ReadSnapShot(&self) {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open("redis.snapshot")?;
+
+        loop{
+            let mut key_len_buf=[0u8;8];
+            match file.read_exact(&mut key_len_buf){
+                Ok((()))=>{
+                    let key=ReadBytesFromSnapshot(key_len_buf, &mut file);
+                    let mut type_len_buf=[0u8;8];
+                    file.read_exact(&mut type_len_buf).unwrap();
+                    let t=String::from_utf8(ReadBytesFromSnapshot(type_len_buf, &mut file)).unwrap();
+                    
+
+                    match t.trim() {
+                        "string"=>{
+                            let mut value_len_buf=[0u8;8];
+                            file.read_exact(&mut value_len_buf).unwrap();
+                            let value=RedisValue::String(RedisString::new(ReadBytesFromSnapshot(value_len_buf, &mut file)));
+                            self.data.insert(key, value);
+                        }
+                        "list"=>{
+                            let mut value_len_buf=[0u8;8];
+                            file.read_exact(&mut value_len_buf).unwrap();
+                            
+                            let value=ReadBytesFromSnapshot(value_len_buf, &mut file);
+                            let mut redis_list=RedisList::new();
+                            redis_list.replace(ReconstructListBytesFromBytes(value));
+                            let list=RedisValue::List(redis_list);
+                            self.data.insert(key, list);
+                        }
+                        "hash"=>{
+                            let mut value_len_buf=[0u8;8];
+                            file.read_exact(&mut value_len_buf).unwrap();
+                            let value=ReadBytesFromSnapshot(value_len_buf, &mut file);
+                            let hash=RedisHash::new();
+                            hash.replace(ReconstructHashBytesFromBytes(value));
+                            let hash=RedisValue::Hash(hash);
+                            self.data.insert(key, hash);
+                        }
+                        "set"=>{
+                            let mut value_len_buf=[0u8;8];
+                            file.read_exact(&mut value_len_buf).unwrap();
+                            let value=ReadBytesFromSnapshot(value_len_buf, &mut file);
+                            let set=RedisSet::new();
+                            set.replace(ReconstructSetBytesFromBytes(value));
+                            let set=RedisValue::Set(set);
+                            self.data.insert(key, set);
+                        }
+                        _=>{
+
+                        }
+                    }
+                    
+
+                }
+                
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    // Reached EOF
+                    break;
+                }
+
+                Err(e) => {
+                    // Some real error occurred
+                    
+                }
+            }
+        }
+    }
 }
 
-fn GetStringSnapshot(redis_string:&RedisString)->(&[u8],[u8;8]){
+fn SetStringSnapshot(redis_string:&RedisString)->(&[u8],[u8;8]){
     let value=redis_string.get();
     let value_len=value.len().to_be_bytes();
     (value,value_len)
 }
 
-fn GetListSnapshot(redis_list:&RedisList)->(&Vec<Vec<u8>>,[u8;8]){
+fn SetListSnapshot(redis_list:&RedisList)->(&Vec<Vec<u8>>,[u8;8]){
     let value=&redis_list.data;
-    let value_len=value.len().to_be_bytes();
-    (value,value_len)
+    let mut value_len = 0;
+
+    for element in value {
+        // element length field
+        value_len += 8;
+
+        // actual element bytes
+        value_len += element.len();
+    }
+    (value,value_len.to_be_bytes())
 }
 
-fn GetHashSnapshot(redis_hash:&RedisHash)->(&HashMap<Vec<u8>, Vec<u8>>,[u8;8]){
+fn SetHashSnapshot(redis_hash:&RedisHash)->(&HashMap<Vec<u8>, Vec<u8>>,[u8;8]){
     let value=&redis_hash.data;
-    let value_len=value.len().to_be_bytes();
-    (value,value_len)
+    let mut value_len = 0;
+    
+    for (k, v) in value {
+        // key length,see in teh savehashsnapshot ther we stre teh first len adn then value/key
+        value_len += 8;
+
+        // key
+        value_len += k.len();
+
+        // value length
+        value_len += 8;
+
+        // value
+        value_len += v.len();
+    }
+
+    (value, value_len.to_be_bytes())
 }
 
-fn GetSetSnapShot(redis_set:&RedisSet)->(&HashSet<Vec<u8>>,[u8;8]){
+fn SetSetSnapShot(redis_set:&RedisSet)->(&HashSet<Vec<u8>>,[u8;8]){
     let value=&redis_set.data;
-    let value_len=value.len().to_be_bytes();
-    (value,value_len)
+    let mut value_len = 0;
+
+    for element in value {
+        // element length field
+        value_len += 8;
+
+        // actual element bytes
+        value_len += element.len();
+    }
+    (value,value_len.to_be_bytes())
+}
+
+fn SaveStringSnapShot(key:&Vec<u8>,key_len:&Vec<u8>,t:&Vec<u8>,value:&Vec<u8>,value_len:&Vec<u8>){
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open("redis.snapshot")?;
+    let mut buf = Vec::new();
+
+    buf.extend_from_slice(key_len);
+    buf.extend_from_slice(key);
+    let type_len = t.len().to_be_bytes();
+    buf.extend_from_slice(&type_len);
+    buf.extend_from_slice(t);
+    buf.extend_from_slice(value_len);
+    buf.extend_from_slice(value);
+
+    file.write_all(&buf);
+
+}
+
+fn SaveListSnapShot(key:&Vec<u8>,key_len:&Vec<u8>,t:&Vec<u8>,value:&Vec<Vec<u8>>,value_len:&Vec<u8>){
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open("redis.snapshot")?;
+    let mut buf = Vec::new();
+
+    buf.extend_from_slice(key_len);
+    buf.extend_from_slice(key);
+    let type_len = t.len().to_be_bytes();
+    buf.extend_from_slice(&type_len);
+    buf.extend_from_slice(t);
+    buf.extend_from_slice(value_len);
+
+
+    // each list element
+    for element in value {
+        let element_len = element.len().to_be_bytes();
+
+        buf.extend_from_slice(&element_len);
+        buf.extend_from_slice(element);
+    }
+
+    file.write_all(&buf)?;
+}
+
+fn SaveHashSnapshot(key:&Vec<u8>,key_len:&Vec<u8>,t:&Vec<u8>,value:&HashMap<Vec<u8>, Vec<u8>>,value_len:&Vec<u8>){
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open("redis.snapshot")?;
+    let mut buf = Vec::new();
+
+    buf.extend_from_slice(key_len);
+    buf.extend_from_slice(key);
+    let type_len = t.len().to_be_bytes();
+    buf.extend_from_slice(&type_len);
+    buf.extend_from_slice(t);
+    buf.extend_from_slice(value_len);
+   
+    for (k,v) in value{
+        let key_len=k.len().to_be_bytes();
+        buf.extend_from_slice(&key_len);
+        buf.extend_from_slice(k);
+
+        let v_len=v.len().to_be_bytes();
+        buf.extend_from_slice(&v_len);
+        buf.extend_from_slice(v);
+
+    }
+
+    file.write_all(&buf)?;
+}
+
+fn SaveSetSnapShot(key:&Vec<u8>,key_len:&Vec<u8>,t:&Vec<u8>,value:&HashSet<Vec<u8>>,value_len:&Vec<u8>){
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open("redis.snapshot")?;
+    let mut buf = Vec::new();
+
+    buf.extend_from_slice(key_len);
+    buf.extend_from_slice(key);
+    let type_len = t.len().to_be_bytes();
+    buf.extend_from_slice(&type_len);
+    buf.extend_from_slice(t);
+    buf.extend_from_slice(value_len);
+   
+    
+
+    // each set element
+    for element in value {
+        let element_len = element.len().to_be_bytes();
+
+        buf.extend_from_slice(&element_len);
+        buf.extend_from_slice(element);
+    }
+
+    file.write_all(&buf)?;
+}
+
+fn TruncateOldSnapshot() -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("redis.snapshot")?;
+
+    Ok(())
+}
+
+fn ReadBytesFromSnapshot(len_buf:[u8;8],file:&mut File)->Vec<u8>{
+    let len = usize::from_be_bytes(len_buf);
+
+    let mut buf = vec![0u8; len];
+
+    file.read_exact(&mut buf).unwrap();
+
+    buf
+    
+}
+
+fn ReconstructListBytesFromBytes(value: Vec<u8>) -> Vec<Vec<u8>> {
+    let mut list: Vec<Vec<u8>> = Vec::new();
+    let mut position = 0;
+
+    while position < value.len() {
+        // Read element length
+        let mut len_buf = [0u8; 8];
+
+        len_buf.copy_from_slice(&value[position..position + 8]);
+        position += 8;
+
+        let element_len = usize::from_be_bytes(len_buf);
+
+        // Read element
+        let element = value[position..position + element_len].to_vec();
+        position += element_len;
+
+        list.push(element);
+    }
+
+    list
+}
+
+fn ReconstructHashBytesFromBytes(value: Vec<u8>) -> HashMap<Vec<u8>, Vec<u8>> {
+    let mut map: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+    let mut position = 0;
+
+    while position < value.len() {
+
+        // Read hash key length
+        let mut key_len_buf = [0u8; 8];
+
+        key_len_buf.copy_from_slice(
+            &value[position..position + 8]
+        );
+
+        position += 8;
+
+        let key_len = usize::from_be_bytes(key_len_buf);
+
+        // Read hash key
+        let key = value[position..position + key_len].to_vec();
+
+        position += key_len;
+
+        // Read hash value length
+        let mut value_len_buf = [0u8; 8];
+
+        value_len_buf.copy_from_slice(
+            &value[position..position + 8]
+        );
+
+        position += 8;
+
+        let value_len = usize::from_be_bytes(value_len_buf);
+
+        // Read hash value
+        let hash_value =
+            value[position..position + value_len].to_vec();
+
+        position += value_len;
+
+        map.insert(key, hash_value);
+    }
+
+    map
+
+}
+
+fn ReconstructSetBytesFromBytes(value: Vec<u8>) -> HashSet<Vec<u8>> {
+    let mut set: HashSet<Vec<u8>> = HashSet::new();
+    let mut position = 0;
+
+    while position < value.len() {
+        // Read element length
+        let mut len_buf = [0u8; 8];
+
+        len_buf.copy_from_slice(&value[position..position + 8]);
+        position += 8;
+
+        let element_len = usize::from_be_bytes(len_buf);
+
+        // Read element
+        let element = value[position..position + element_len].to_vec();
+        position += element_len;
+
+        set.insert(element);
+    }
+
+    set
 }

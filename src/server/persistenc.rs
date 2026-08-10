@@ -213,9 +213,8 @@ pub trait Persistence {
 
     fn SaveSnapShot(& self);
 
-    fn ReadSnapShot(){
-
-    }
+    fn ReadSnapShot(&self);
+    
 }
 
 fn create_if_not_exists(path: &str) -> Result<std::fs::File,Box<dyn std::error::Error>> {
