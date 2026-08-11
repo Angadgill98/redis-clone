@@ -23,10 +23,18 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
     let redis = Arc::new(Mutex::new(RedisServer::new()));
     
     let mut reconstructor_redis=redis.lock().await;
-    let content=reconstructor_redis.ReadLog();
-    let mpa=reconstructor_redis.ReconstructLogFile(content);
+    //for reconstruction from log file
+    // let content=reconstructor_redis.ReadLog();
+    // let mpa=reconstructor_redis.ReconstructLogFile(content);
 
-    reconstructor_redis.data=mpa;
+    // reconstructor_redis.data=mpa;
+
+
+    //for reconstruction from snapshots
+    // reconstructor_redis.SaveSnapShot()?;
+
+    // reconstructor_redis.ReadSnapShot()?;
+
     drop(reconstructor_redis);
 
     println!("Server: running");

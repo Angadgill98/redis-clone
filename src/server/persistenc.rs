@@ -216,10 +216,6 @@ pub trait Persistence {
 
     }
 
-    // fn SaveSnapShot(& self);
-
-    //fn ReadSnapShot(&self);
-
     fn ReadSnapShot(&mut self) -> Result<(), ServerError>;
 
     fn SaveSnapShot(& self)-> Result<(), ServerError>;
