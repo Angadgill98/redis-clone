@@ -1,1 +1,8 @@
 in integer the big and little edians liek if send a array of u8 adepending on the method differnt no can be produced liiek in from_br_bytes adn from_le_bytes 
+
+
+
+
+also the value hsoudl be one word not multuple 
+
+if like string type has key qwe and values as "as asd wqer "only "as" is aved nothing else

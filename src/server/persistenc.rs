@@ -1,28 +1,32 @@
-use std::{collections::HashMap, fs::OpenOptions};
+use std::{collections::HashMap, fs::OpenOptions, io::Write};
 
-use crate::server::redis::{RedisHash, RedisList, RedisSet, RedisString, RedisValue};
+use crate::{error::ServerError, server::redis::{RedisHash, RedisList, RedisSet, RedisString, RedisValue}};
 
 
 
 
 
 pub trait Persistence {
-    fn WriteToLog(&self,command:String,args:&[String]) {
-        let content = format!("{} {}", command,args.join(" "));
-        let file=std::fs::write("redis.log", content).unwrap();
+    fn WriteToLog(&self,command:String) {
+        let content = format!("{} \n", command);
+
+        let mut file = create_if_not_exists("redis.log").unwrap();
+
+        file.write_all(content.as_bytes()).unwrap();
     }
-    fn ReadLog()->String {
-        let mut file=create_if_not_exists("refis.log").unwrap();
+    
+    fn ReadLog(&self)->String {
+        let mut file=create_if_not_exists("redis.log").unwrap();
         let data=std::fs::read("redis.log").unwrap();
         let content=String::from_utf8(data).unwrap();
         content
     }
 
-    fn ReconstructLogFile(content:String)->HashMap<Vec<u8>,RedisValue>{
+    fn ReconstructLogFile(&self,content:String)->HashMap<Vec<u8>,RedisValue>{
         let mut map=HashMap::new();
 
         for operation in content.lines(){
-            let commands:Vec<&str>=operation.split(" ").collect();
+            let commands:Vec<&str>=operation.split_whitespace().collect();
             match commands[0] {
                 "set"=>{
                     let key=commands[1].as_bytes().to_vec();
@@ -33,6 +37,7 @@ pub trait Persistence {
                 "get"=>{}
                 "append"=>{
                     let key=commands[1].as_bytes().to_vec();
+                    
                     let value=RedisValue::String(RedisString::new(commands[2].as_bytes().to_vec()) ) ;
 
                     map.insert(key, value);
@@ -211,9 +216,13 @@ pub trait Persistence {
 
     }
 
-    fn SaveSnapShot(& self);
+    // fn SaveSnapShot(& self);
 
-    fn ReadSnapShot(&self);
+    //fn ReadSnapShot(&self);
+
+    fn ReadSnapShot(&mut self) -> Result<(), ServerError>;
+
+    fn SaveSnapShot(& self)-> Result<(), ServerError>;
     
 }
 

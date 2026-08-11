@@ -1,15 +1,15 @@
-use std::{io::Write, net::TcpStream};
+use std::{io::{Read, Write}, net::TcpStream};
 
 use crate::error::ServerError;
 
 
 
-pub fn Init()->Result<(),ServerError>{
+pub fn Init()->Result<redis_client,ServerError>{
     let socket=CreateSocket()?;
 
     let redis=redis_client::new(socket);
 
-    Ok(())
+    Ok(redis)
 }
 
 fn CreateSocket()->Result<std::net::TcpStream, ServerError>{
@@ -20,44 +20,614 @@ fn CreateSocket()->Result<std::net::TcpStream, ServerError>{
     Ok(socket)
 }
 
-struct redis_client{
+pub struct redis_client{
     socket:TcpStream
 }
 
 impl redis_client {
-    fn new(stream:TcpStream)->Self{
-        redis_client { 
-            socket: stream 
+    fn new(stream: TcpStream) -> Self {
+        redis_client {
+            socket: stream,
         }
     }
 
-    fn set(&mut self,key:String,value:String){
-        let key_bytes=key.as_bytes();
-        let key_len=key_bytes.len().to_be_bytes();
+    // ========================================================
+    // STRING
+    // ========================================================
 
-        let value_bytes=value.as_bytes();
-        let value_len=value_bytes.len().to_be_bytes();
+    pub fn set(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("string", &format!("set {} {}", key, value));
 
-        let op=1;
-        
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
 
-        self.socket.write_all(&[op]).unwrap();
-        self.socket.write_all(&key_len).unwrap();
-        self.socket.write_all(key_bytes).unwrap();
-        self.socket.write_all(&value_len).unwrap();
-        self.socket.write_all(value_bytes).unwrap();
-
+        ReadStatusNoResponse(&mut self.socket)
     }
 
-    fn get(&mut self,key:String){
-        let key_bytes=key.as_bytes();
-        let key_len=key_bytes.len().to_be_bytes();
+    pub fn get(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("string", &format!("get {}", key));
 
-        let op=1;
-        
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
 
-        self.socket.write_all(&[op]).unwrap();
-        self.socket.write_all(&key_len).unwrap();
-        self.socket.write_all(key_bytes).unwrap();
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn append(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("string", &format!("append {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn len(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("string", &format!("len {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    // ========================================================
+    // LIST
+    // ========================================================
+
+    pub fn lcreate(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("lcreate {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn lpush(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("lpush {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn rpush(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("rpush {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn lpop(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("lpop {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn rpop(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("rpop {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn llen(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("llen {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn lindex(&mut self, key: String, index: usize) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("lindex {} {}", key, index));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn lset(&mut self, key: String, index: usize, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("lset {} {} {}", key, index, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn lclear(&mut self, key: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("list", &format!("lclear {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    // ========================================================
+    // HASH
+    // ========================================================
+
+    pub fn hcreate(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hcreate {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn hset(&mut self, key: String, field: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hset {} {} {}", key, field, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn hget(&mut self, key: String, field: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hget {} {}", key, field));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn hexists(&mut self, key: String, field: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hexists {} {}", key, field));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn hdel(&mut self, key: String, field: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hdel {} {}", key, field));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn hlen(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hlen {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn hclear(&mut self, key: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hclear {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn hkeys(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hkeys {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn hvalues(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("hash", &format!("hvalues {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    // ========================================================
+    // SET
+    // ========================================================
+
+    pub fn screate(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("set", &format!("screate {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn sadd(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("set", &format!("sadd {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn srem(&mut self, key: String, value: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("set", &format!("srem {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn scontains(&mut self, key: String, value: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("set", &format!("scontains {} {}", key, value));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn slen(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("set", &format!("slen {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+
+    pub fn sclear(&mut self, key: String) -> Result<(), ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("set", &format!("sclear {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatusNoResponse(&mut self.socket)
+    }
+
+    pub fn svalues(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+        let (t_bytes, t_len, data_bytes, data_len) =
+            CreateBuffer("set", &format!("svalues {}", key));
+
+        SendBuffer(
+            &mut self.socket,
+            &t_bytes,
+            &t_len,
+            &data_bytes,
+            &data_len,
+        )?;
+
+        ReadStatus(&mut self.socket)
+    }
+}
+
+// ========================================================
+// BUFFER CREATION
+// ========================================================
+
+fn CreateBuffer(
+    redis_type: &str,
+    command: &str,
+) -> (Vec<u8>, [u8; 8], Vec<u8>, [u8; 8]) {
+    let t_bytes = redis_type.as_bytes().to_vec();
+
+    let t_len = (t_bytes.len() as u64).to_be_bytes();
+
+    let data_bytes = command.as_bytes().to_vec();
+
+    let data_len = (data_bytes.len() as u64).to_be_bytes();
+
+    (
+        t_bytes,
+        t_len,
+        data_bytes,
+        data_len,
+    )
+}
+
+// ========================================================
+// ERROR RESPONSE
+// ========================================================
+
+fn HandleError(socket: &mut TcpStream) -> Result<(), ServerError> {
+    let mut response_len = [0u8; 8];
+
+    socket
+        .read_exact(&mut response_len)
+        .map_err(ServerError::IoErr)?;
+
+    let response_len = u64::from_be_bytes(response_len) as usize;
+
+    let mut response = vec![0u8; response_len];
+
+    socket
+        .read_exact(&mut response)
+        .map_err(ServerError::IoErr)?;
+
+    let error = String::from_utf8(response)
+        .map_err(|e| ServerError::ServerResponse(e.to_string()))?;
+
+    Err(ServerError::ServerResponse(error))
+}
+
+// ========================================================
+// SEND REQUEST
+// ========================================================
+
+fn SendBuffer(
+    socket: &mut TcpStream,
+    t_bytes: &[u8],
+    t_len: &[u8; 8],
+    data_bytes: &[u8],
+    data_len: &[u8; 8],
+) -> Result<(), ServerError> {
+    let mut buffer = Vec::new();
+
+    buffer.extend_from_slice(t_len);
+    buffer.extend_from_slice(t_bytes);
+
+    buffer.extend_from_slice(data_len);
+    buffer.extend_from_slice(data_bytes);
+
+    let buffer_len = (buffer.len() as u64).to_be_bytes();
+
+    let mut final_buffer = Vec::new();
+
+    final_buffer.extend_from_slice(&buffer_len);
+    final_buffer.extend_from_slice(&buffer);
+
+    socket
+        .write_all(&final_buffer)
+        .map_err(ServerError::IoErr)?;
+
+    Ok(())
+}
+
+// ========================================================
+// READ RESPONSE WITH VALUE
+// ========================================================
+
+fn ReadStatus(socket: &mut TcpStream) -> Result<Vec<u8>, ServerError> {
+    let mut status_buf = [0u8; 1];
+
+    socket
+        .read_exact(&mut status_buf)
+        .map_err(ServerError::IoErr)?;
+
+    match status_buf[0] {
+        1 => {
+            let mut len_buf = [0u8; 8];
+
+            socket
+                .read_exact(&mut len_buf)
+                .map_err(ServerError::IoErr)?;
+
+            let len = u64::from_be_bytes(len_buf) as usize;
+
+            let mut response = vec![0u8; len];
+
+            socket
+                .read_exact(&mut response)
+                .map_err(ServerError::IoErr)?;
+
+            Ok(response)
+        }
+
+        0 => {
+            HandleError(socket)?;
+            unreachable!()
+        }
+
+        status => {
+            Err(ServerError::ServerResponse(
+                format!("Invalid status code: {}", status),
+            ))
+        }
+    }
+}
+
+// ========================================================
+// READ RESPONSE WITHOUT VALUE
+// ========================================================
+
+fn ReadStatusNoResponse(socket: &mut TcpStream) -> Result<(), ServerError> {
+    let mut status_buf = [0u8; 1];
+
+    socket
+        .read_exact(&mut status_buf)
+        .map_err(ServerError::IoErr)?;
+
+    match status_buf[0] {
+        1 => Ok(()),
+
+        0 => HandleError(socket),
+
+        status => {
+            Err(ServerError::ServerResponse(
+                format!("Invalid status code: {}", status),
+            ))
+        }
     }
 }

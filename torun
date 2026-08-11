@@ -1,0 +1,4 @@
+cargo build --release
+
+
+sudo ./target/release/redis-clone
