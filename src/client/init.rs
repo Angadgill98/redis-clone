@@ -6,8 +6,39 @@ use crate::error::ServerError;
 
 pub fn Init()->Result<redis_client,ServerError>{
     let socket=CreateSocket()?;
-
+    let mut pubSub_socket_fix=socket.try_clone().unwrap();
     let redis=redis_client::new(socket);
+
+    std::thread::spawn(move || {
+        loop {
+            let mut buf=[0u8;1];
+            println!("{:?}",buf);
+            pubSub_socket_fix.read_exact(&mut buf).unwrap();
+            println!("{:?}",buf);
+            match buf[0] {
+                1 => {
+                    match ReadStatus(&mut pubSub_socket_fix) {
+                        Ok(data) => {
+                            println!("Received: {:?}", data);
+                            let value=String::from_utf8(data).unwrap();
+                            println!("Received string: {}", value);
+                        }
+                        Err(e) => {
+                            eprintln!("Read error: {}", e);
+                        }
+                    }
+                }
+
+                0 => {
+                    if let Err(e) = ReadStatusNoResponse(&mut pubSub_socket_fix) {
+                        eprintln!("Read error: {}", e);
+                    }
+                }
+                _=>{}
+            }
+            
+        }
+    });
 
     Ok(redis)
 }
@@ -34,7 +65,29 @@ impl redis_client {
             transaction_queue:Vec::new()
         }
     }
-    pub fn HandleTransaction(&mut self)-> Result<Vec<u8>, ServerError>{
+    pub fn subscribe(&mut self,  channel: String) -> Result<(), ServerError>{
+        let command=format!("subscribe {}",channel);
+        let (t_bytes, t_len, data_bytes, data_len)=CreateBuffer("pubSub", command.trim());
+        SendBuffer(&mut self.socket, &t_bytes, &t_len, &data_bytes, &data_len)?;
+        Ok(())
+    }
+
+    pub fn publish(&mut self, channel: String, message: String) -> Result<(), ServerError>{
+        let command=format!("publish {} {}",channel,message);
+
+        let (t_bytes, t_len, data_bytes, data_len)=CreateBuffer("pubSub", command.trim());
+        SendBuffer(&mut self.socket, &t_bytes, &t_len, &data_bytes, &data_len)?;
+        Ok(())
+    }
+
+    pub fn unsubscribe(&mut self,channel: String) -> Result<(), ServerError>{
+        let commadn=format!("publish {}",channel);
+        let (t_bytes, t_len, data_bytes, data_len)=CreateBuffer("pubSub", commadn.trim());
+        SendBuffer(&mut self.socket, &t_bytes, &t_len, &data_bytes, &data_len)?;
+        Ok(())
+    }
+
+    pub fn HandleTransaction(&mut self)-> Result<(), ServerError>{
 
         
         let commands=&self.transaction_queue;
@@ -62,7 +115,7 @@ impl redis_client {
 
         self.socket.write_all(&final_buf).map_err(ServerError::IoErr)?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
         
     }
 
@@ -82,10 +135,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn get(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn get(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("string", &format!("get {}", key));
 
@@ -97,7 +150,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
     pub fn append(&mut self, key: String, value: String) -> Result<(), ServerError> {
@@ -112,10 +165,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn len(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn len(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("string", &format!("len {}", key));
 
@@ -127,7 +180,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
     // ========================================================
@@ -146,7 +199,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
     pub fn lpush(&mut self, key: String, value: String) -> Result<(), ServerError> {
@@ -161,7 +214,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
     pub fn rpush(&mut self, key: String, value: String) -> Result<(), ServerError> {
@@ -176,10 +229,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn lpop(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn lpop(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("list", &format!("lpop {}", key));
 
@@ -191,10 +244,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
-    pub fn rpop(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn rpop(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("list", &format!("rpop {}", key));
 
@@ -206,10 +259,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
-    pub fn llen(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn llen(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("list", &format!("llen {}", key));
 
@@ -221,10 +274,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
-    pub fn lindex(&mut self, key: String, index: usize) -> Result<Vec<u8>, ServerError> {
+    pub fn lindex(&mut self, key: String, index: usize) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("list", &format!("lindex {} {}", key, index));
 
@@ -236,7 +289,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
     pub fn lset(&mut self, key: String, index: usize, value: String) -> Result<(), ServerError> {
@@ -251,7 +304,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
     pub fn lclear(&mut self, key: String) -> Result<(), ServerError> {
@@ -266,7 +319,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
     // ========================================================
@@ -285,7 +338,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
     pub fn hset(&mut self, key: String, field: String, value: String) -> Result<(), ServerError> {
@@ -300,10 +353,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn hget(&mut self, key: String, field: String) -> Result<Vec<u8>, ServerError> {
+    pub fn hget(&mut self, key: String, field: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("hash", &format!("hget {} {}", key, field));
 
@@ -315,10 +368,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
-    pub fn hexists(&mut self, key: String, field: String) -> Result<Vec<u8>, ServerError> {
+    pub fn hexists(&mut self, key: String, field: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("hash", &format!("hexists {} {}", key, field));
 
@@ -330,7 +383,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
     pub fn hdel(&mut self, key: String, field: String) -> Result<(), ServerError> {
@@ -345,10 +398,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn hlen(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn hlen(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("hash", &format!("hlen {}", key));
 
@@ -360,7 +413,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
     pub fn hclear(&mut self, key: String) -> Result<(), ServerError> {
@@ -375,10 +428,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn hkeys(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn hkeys(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("hash", &format!("hkeys {}", key));
 
@@ -390,10 +443,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
-    pub fn hvalues(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn hvalues(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("hash", &format!("hvalues {}", key));
 
@@ -405,7 +458,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
     // ========================================================
@@ -424,7 +477,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
     pub fn sadd(&mut self, key: String, value: String) -> Result<(), ServerError> {
@@ -439,7 +492,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
     pub fn srem(&mut self, key: String, value: String) -> Result<(), ServerError> {
@@ -454,10 +507,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn scontains(&mut self, key: String, value: String) -> Result<Vec<u8>, ServerError> {
+    pub fn scontains(&mut self, key: String, value: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("set", &format!("scontains {} {}", key, value));
 
@@ -469,10 +522,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
-    pub fn slen(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn slen(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("set", &format!("slen {}", key));
 
@@ -484,7 +537,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 
     pub fn sclear(&mut self, key: String) -> Result<(), ServerError> {
@@ -499,10 +552,10 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatusNoResponse(&mut self.socket)
+        Ok(())
     }
 
-    pub fn svalues(&mut self, key: String) -> Result<Vec<u8>, ServerError> {
+    pub fn svalues(&mut self, key: String) -> Result<(), ServerError> {
         let (t_bytes, t_len, data_bytes, data_len) =
             CreateBuffer("set", &format!("svalues {}", key));
 
@@ -514,7 +567,7 @@ impl redis_client {
             &data_len,
         )?;
 
-        ReadStatus(&mut self.socket)
+        Ok(())
     }
 }
 

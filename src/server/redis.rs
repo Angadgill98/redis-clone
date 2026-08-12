@@ -1,7 +1,11 @@
 use core::hash;
-use std::{collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Write}};
+use std::{collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Write}, net::SocketAddr};
 
-use tokio::net::tcp::WriteHalf;
+
+
+
+
+use tokio::net::tcp::OwnedWriteHalf;
 
 use crate::{error::ServerError, server::persistenc::Persistence};
 
@@ -15,7 +19,9 @@ pub enum RedisValue {
 }
 
 #[derive(Debug)]
-pub struct RedisServer {pub data: HashMap<Vec<u8>, RedisValue>}
+pub struct RedisServer {pub data: HashMap<Vec<u8>, RedisValue>,pub Channels:HashMap<Vec<u8>,HashSet<SocketAddr>>,pub Clients:HashMap<SocketAddr,OwnedWriteHalf>}
+
+
 
 #[derive(Debug)]
 pub struct RedisString {data: Vec<u8>,}
@@ -40,7 +46,8 @@ impl RedisServer {
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
-           
+            Channels: HashMap::new(),
+            Clients: HashMap::new() 
         }
     }
 

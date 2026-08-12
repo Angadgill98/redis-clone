@@ -1,11 +1,11 @@
 use std::{sync::{Arc}};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{Mutex, MutexGuard, oneshot::Sender},
+    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::OwnedReadHalf}, sync::{Mutex, MutexGuard, oneshot::Sender},
 };
 
 use crate::{
-    error::ServerError, server::{persistenc::Persistence, redis::{
+    error::ServerError, server::{persistenc::Persistence, pubSub, redis::{
         self, RedisHash, RedisList, RedisServer, RedisSet, RedisString, RedisValue,
     }, transactions},
 };
@@ -41,11 +41,14 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
 
     loop {
         let (mut stream, client_addr) = socket.accept().await?;
-        
+        let (mut reader,writer)=stream.into_split();
         let redis_thread = Arc::clone(&redis);
+        let mut redis=redis_thread.lock().await;
+        redis.Clients.insert(client_addr, writer);
 
+        drop(redis);
         tokio::spawn(async move {
-            if let Err(e) = HandleClient(redis_thread,&mut stream, client_addr).await {
+            if let Err(e) = HandleClient(redis_thread,&mut reader, client_addr).await {
                 
             }
         });
@@ -60,7 +63,7 @@ async fn CreateSocket() -> Result<TcpListener, ServerError> {
     Ok(socket)
 }
 
-async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut TcpStream,client_addr: core::net::SocketAddr) -> Result<(), ServerError> {
+async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut OwnedReadHalf,client_addr: core::net::SocketAddr) -> Result<(), ServerError> {
     loop {
         let mut buf_len = [0u8; 8];
 
@@ -76,43 +79,60 @@ async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut TcpStream,clien
 
         let (redis_type, command) = Simplify(&buf)?;
 
-        match HandleType(&redis, redis_type, command.clone()).await{
+        match HandleType(&redis, redis_type, command.clone(),client_addr.clone()).await{
             Ok(Some(res))=>{
-                
-                let redis=redis.lock().await;
+            
+                let mut redis=redis.lock().await;
                 redis.WriteToLog(command);
-                drop(redis);
-                println!("Server:Operation was success sending res");
+                
+                let writer=redis.Clients.get_mut(&client_addr).unwrap();
+
+                let res_with_data=[1u8;1];
+                writer.write_all(&res_with_data).await?;
                 let status=[1u8;1];
-                stream.write_all(&status).await.unwrap();
+                writer.write_all(&status).await?;
                 let response_len = (res.len() as u64).to_be_bytes(); 
-                stream.write_all(&response_len).await?;
-                stream.write_all(&res).await?;
+                writer.write_all(&response_len).await?;
+                writer.write_all(&res).await?;
+                println!("Server:Operation was success sending res");
+                drop(redis);
             }
             Ok(None)=>{
-                let redis=redis.lock().await;
+                let mut redis=redis.lock().await;
                 redis.WriteToLog(command);
-                drop(redis);
-                println!("Server:Operation was success sending res");
+                
+                let writer=redis.Clients.get_mut(&client_addr).unwrap();
+
+                let res_with_data=[0u8;1];
+                writer.write_all(&res_with_data).await?;
                 let status=[1u8;1];
-                stream.write_all(&status).await.unwrap();
+                
+                writer.write_all(&status).await.unwrap();
+                println!("Server:Operation was success sending res");
+
+                drop(redis);
             }
             Err(e)=>{
                 eprintln!("Client error: {}", e);
-        
+                let mut redis=redis.lock().await;
+                let writer=redis.Clients.get_mut(&client_addr).unwrap();
+                let res_with_data=[1u8;1];
+                writer.write_all(&res_with_data).await?;
                 let status=[0u8;1];
                 let err=e.to_string();
                 let err=err.as_bytes();
                 let error_len=(err.len() as u64).to_be_bytes(); 
-                
-                stream.write_all(&status).await.unwrap();
-                stream.write_all(&error_len).await.unwrap();
-                stream.write_all(err).await.unwrap();
+                writer.write_all(&status).await.unwrap();
+                writer.write_all(&error_len).await.unwrap();
+                writer.write_all(err).await.unwrap();
+                drop(redis);
             }
         }
         {
         let redis=redis.lock().await;
         println!("Server: the map struct is {:?}",redis.data);
+        println!("Server: connected clients {:?}",redis.Clients);
+        println!("Server: channels {:?}",redis.Channels);
         }   
     }
 }
@@ -183,7 +203,7 @@ fn Simplify(operation: &[u8]) -> Result<(String, String), ServerError> {
     Ok((redis_type, command))
 }
 
-async fn HandleType(redis: &Arc<Mutex<RedisServer>>,redis_type: String,command: String) -> Result<Option<Vec<u8>>, ServerError> {
+async fn HandleType(redis: &Arc<Mutex<RedisServer>>,redis_type: String,command: String,client_addr: core::net::SocketAddr) -> Result<Option<Vec<u8>>, ServerError> {
     let mut redis:MutexGuard<'_, RedisServer>=redis.lock().await;
     match redis_type.trim() {
         "string" => {
@@ -203,6 +223,10 @@ async fn HandleType(redis: &Arc<Mutex<RedisServer>>,redis_type: String,command: 
         }
         "transaction"=>{
             transactions::HandleTransactions(&mut redis, command).await
+        }
+        "pubSub"=>{
+            pubSub::HandlePubSub(&mut redis, command,client_addr).await
+
             
         }
        

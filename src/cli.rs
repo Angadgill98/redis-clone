@@ -7,6 +7,7 @@ pub fn run(redis: &mut redis_client) {
     println!("LIST: LCREATE LPUSH RPUSH LPOP RPOP LLEN LINDEX LSET LCLEAR");
     println!("HASH: HCREATE HSET HGET HEXISTS HDEL HLEN HCLEAR HKEYS HVALUES");
     println!("SET: SCREATE SADD SREM SCONTAINS SLEN SCLEAR SVALUES");
+    println!("PUBSUB: SUBSCRIBE PUBLISH UNSUBSCRIBE");
     println!("TRANSACTION: MULTI EXEC DISCARD");
     println!("Type commands below:");
 
@@ -33,7 +34,85 @@ pub fn run(redis: &mut redis_client) {
         }
 
         match parts[0].to_lowercase().as_str() {
+            // ========================================================
+            // PUBSUB
+            // ========================================================
 
+            "subscribe" => {
+                if parts.len() != 2 {
+                    println!("Usage: SUBSCRIBE channel");
+                    continue;
+                }
+
+                let command = parts[1].to_string();
+
+                if QueueHandler(
+                    redis,
+                    command,
+                    "pubsub".to_string(),
+                    "subscribe".to_string(),
+                ) {
+                    continue;
+                }
+
+                match redis.subscribe(parts[1].to_string()) {
+                    Ok(()) => println!("OK"),
+                    Err(e) => println!("(error) {}", e),
+                }
+            }
+
+            "publish" => {
+                if parts.len() < 3 {
+                    println!("Usage: PUBLISH channel message");
+                    continue;
+                }
+
+                let command = format!(
+                    "{} {}",
+                    parts[1],
+                    parts[2..].join(" ")
+                );
+
+                if QueueHandler(
+                    redis,
+                    command,
+                    "pubsub".to_string(),
+                    "publish".to_string(),
+                ) {
+                    continue;
+                }
+
+                match redis.publish(
+                    parts[1].to_string(),
+                    parts[2..].join(" "),
+                ) {
+                    Ok(()) => {}
+                    Err(e) => println!("(error) {}", e),
+                }
+            }
+
+            "unsubscribe" => {
+                if parts.len() != 2 {
+                    println!("Usage: UNSUBSCRIBE channel");
+                    continue;
+                }
+
+                let command = parts[1].to_string();
+
+                if QueueHandler(
+                    redis,
+                    command,
+                    "pubsub".to_string(),
+                    "unsubscribe".to_string(),
+                ) {
+                    continue;
+                }
+
+                match redis.unsubscribe(parts[1].to_string()) {
+                    Ok(()) => println!("OK"),
+                    Err(e) => println!("(error) {}", e),
+                }
+            }
             // ========================================================
             // TRANSACTION
             // ========================================================
@@ -68,10 +147,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.HandleTransaction() {
                     Ok(res) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&res)
-                        )
+                        
                     },
                     Err(e) => println!("(error) {}", e),
                 }
@@ -146,10 +222,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.get(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -200,10 +273,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.len(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -310,10 +380,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.lpop(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -338,10 +405,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.rpop(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -366,10 +430,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.llen(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -405,10 +466,7 @@ pub fn run(redis: &mut redis_client) {
                     index,
                 ) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -565,10 +623,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2].to_string(),
                 ) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -600,10 +655,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2].to_string(),
                 ) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -658,10 +710,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.hlen(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -709,10 +758,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.hkeys(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -737,10 +783,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.hvalues(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -862,10 +905,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2].to_string(),
                 ) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -890,10 +930,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.slen(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -941,10 +978,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.svalues(parts[1].to_string()) {
                     Ok(value) => {
-                        println!(
-                            "{}",
-                            String::from_utf8_lossy(&value)
-                        )
+                        
                     }
                     Err(e) => println!("(error) {}", e),
                 }
