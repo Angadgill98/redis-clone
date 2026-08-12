@@ -78,56 +78,80 @@ async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut OwnedReadHalf,c
         // println!("Server: {:?},{}",buf,len);
 
         let (redis_type, command) = Simplify(&buf)?;
+        
+        match HandleType(&redis, redis_type.clone(), command.clone(),client_addr.clone()).await{
+       
+            Ok(Some(res)) => {
+                let mut redis = redis.lock().await;
 
-        match HandleType(&redis, redis_type, command.clone(),client_addr.clone()).await{
-            Ok(Some(res))=>{
-            
-                let mut redis=redis.lock().await;
-                redis.WriteToLog(command);
-                
-                let writer=redis.Clients.get_mut(&client_addr).unwrap();
+                redis.WriteToLog(command.clone());
 
-                let res_with_data=[1u8;1];
-                writer.write_all(&res_with_data).await?;
-                let status=[1u8;1];
-                writer.write_all(&status).await?;
-                let response_len = (res.len() as u64).to_be_bytes(); 
-                writer.write_all(&response_len).await?;
-                writer.write_all(&res).await?;
-                println!("Server:Operation was success sending res");
-                drop(redis);
-            }
-            Ok(None)=>{
-                let mut redis=redis.lock().await;
-                redis.WriteToLog(command);
-                
-                let writer=redis.Clients.get_mut(&client_addr).unwrap();
+                let writer = redis.Clients.get_mut(&client_addr).unwrap();
 
-                let res_with_data=[0u8;1];
-                writer.write_all(&res_with_data).await?;
-                let status=[1u8;1];
-                
-                writer.write_all(&status).await.unwrap();
-                println!("Server:Operation was success sending res");
+                let mut response = Vec::with_capacity(1 + 8 + res.len());
+
+                response.push(1);
+
+                let response_len = (res.len() as u64).to_be_bytes();
+                response.extend_from_slice(&response_len);
+
+                response.extend_from_slice(&res);
+
+                writer.write_all(&response).await?;
+
+                println!("Server: Operation was successful, sending response");
 
                 drop(redis);
             }
-            Err(e)=>{
+
+            Ok(None) => {
+                if redis_type.trim()=="pubSub" {
+                    
+                }else{
+                    let mut redis = redis.lock().await;
+
+                    redis.WriteToLog(command.clone());
+
+                    let writer = redis.Clients.get_mut(&client_addr).unwrap();
+
+                    let response = [1u8];
+
+                    writer.write_all(&response).await?;
+
+                    println!("Server: Operation was successful, no response data");
+
+                    drop(redis);
+                }
+                
+            }
+
+            Err(e) => {
                 eprintln!("Client error: {}", e);
-                let mut redis=redis.lock().await;
-                let writer=redis.Clients.get_mut(&client_addr).unwrap();
-                let res_with_data=[1u8;1];
-                writer.write_all(&res_with_data).await?;
-                let status=[0u8;1];
-                let err=e.to_string();
-                let err=err.as_bytes();
-                let error_len=(err.len() as u64).to_be_bytes(); 
-                writer.write_all(&status).await.unwrap();
-                writer.write_all(&error_len).await.unwrap();
-                writer.write_all(err).await.unwrap();
+
+                let mut redis = redis.lock().await;
+
+                let writer = redis.Clients.get_mut(&client_addr).unwrap();
+
+                let err = e.to_string();
+                let err_bytes = err.as_bytes();
+
+
+                let mut response = Vec::with_capacity(1 + 8 + err_bytes.len());
+
+                response.push(0);
+
+                let error_len = (err_bytes.len() as u64).to_be_bytes();
+                response.extend_from_slice(&error_len);
+
+                response.extend_from_slice(err_bytes);
+
+                writer.write_all(&response).await?;
+
                 drop(redis);
             }
-        }
+        }       
+        
+        
         {
         let redis=redis.lock().await;
         println!("Server: the map struct is {:?}",redis.data);

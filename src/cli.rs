@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
 use crate::client::init::redis_client;
+
 pub fn run(redis: &mut redis_client) {
     println!("Supported commands:");
     println!("STRING: SET GET APPEND LEN");
@@ -46,7 +47,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "pubsub".to_string(),
@@ -73,7 +74,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2..].join(" ")
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "pubsub".to_string(),
@@ -99,7 +100,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "pubsub".to_string(),
@@ -113,6 +114,7 @@ pub fn run(redis: &mut redis_client) {
                     Err(e) => println!("(error) {}", e),
                 }
             }
+
             // ========================================================
             // TRANSACTION
             // ========================================================
@@ -147,8 +149,9 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.HandleTransaction() {
                     Ok(res) => {
+                        println!("{}", String::from_utf8_lossy(&res));
                         
-                    },
+                    }
                     Err(e) => println!("(error) {}", e),
                 }
 
@@ -185,7 +188,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = format!("{} {}", parts[1], parts[2]);
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "string".to_string(),
@@ -211,7 +214,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "string".to_string(),
@@ -222,7 +225,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.get(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -236,7 +239,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = format!("{} {}", parts[1], parts[2]);
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "string".to_string(),
@@ -262,7 +265,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "string".to_string(),
@@ -273,7 +276,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.len(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -291,7 +294,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -317,7 +320,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = format!("{} {}", parts[1], parts[2]);
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -343,7 +346,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = format!("{} {}", parts[1], parts[2]);
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -369,7 +372,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -380,7 +383,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.lpop(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -394,7 +397,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -405,7 +408,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.rpop(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -419,7 +422,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -430,7 +433,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.llen(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -452,7 +455,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = format!("{} {}", parts[1], parts[2]);
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -466,7 +469,7 @@ pub fn run(redis: &mut redis_client) {
                     index,
                 ) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -493,7 +496,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[3]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -520,7 +523,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "list".to_string(),
@@ -547,7 +550,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -578,7 +581,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[3]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -609,7 +612,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -623,7 +626,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2].to_string(),
                 ) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -641,7 +644,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -655,7 +658,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2].to_string(),
                 ) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -673,7 +676,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -699,7 +702,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -710,7 +713,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.hlen(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -724,7 +727,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -747,7 +750,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -758,7 +761,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.hkeys(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -772,7 +775,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "hash".to_string(),
@@ -783,7 +786,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.hvalues(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -801,7 +804,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "set".to_string(),
@@ -831,7 +834,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "set".to_string(),
@@ -861,7 +864,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "set".to_string(),
@@ -891,7 +894,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2]
                 );
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "set".to_string(),
@@ -905,7 +908,7 @@ pub fn run(redis: &mut redis_client) {
                     parts[2].to_string(),
                 ) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -919,7 +922,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "set".to_string(),
@@ -930,7 +933,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.slen(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -944,7 +947,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "set".to_string(),
@@ -967,7 +970,7 @@ pub fn run(redis: &mut redis_client) {
 
                 let command = parts[1].to_string();
 
-                if QueueHandler(
+                if ModeHandler(
                     redis,
                     command,
                     "set".to_string(),
@@ -978,7 +981,7 @@ pub fn run(redis: &mut redis_client) {
 
                 match redis.svalues(parts[1].to_string()) {
                     Ok(value) => {
-                        
+                        println!("{}", String::from_utf8_lossy(&value));
                     }
                     Err(e) => println!("(error) {}", e),
                 }
@@ -999,16 +1002,44 @@ pub fn run(redis: &mut redis_client) {
         }
     }
 }
-fn QueueHandler(redis: &mut redis_client,command: String,t: String,operation: String,) -> bool {
+
+fn ModeHandler(
+    redis: &mut redis_client,
+    command: String,
+    t: String,
+    operation: String,
+) -> bool {
+    // ========================================================
+    // TRANSACTION MODE
+    // ========================================================
+
     if redis.transaction_mode {
-        
-        let command = format!("{} {} {}", t,operation, command);
-       
+        let command = format!("{} {} {}", t, operation, command);
+
         redis.transaction_queue.push(command);
 
         println!("QUEUED");
 
         return true;
+    }
+
+    // ========================================================
+    // SUBSCRIPTION MODE
+    // Only SUBSCRIBE, UNSUBSCRIBE and PUBLISH are allowed
+    // ========================================================
+
+    if redis.subscription_mode {
+        if operation != "subscribe"
+            && operation != "unsubscribe"
+            && operation != "publish"
+        {
+            println!(
+                "(error) Can't execute '{}' while in subscription mode",
+                operation
+            );
+
+            return true;
+        }
     }
 
     false

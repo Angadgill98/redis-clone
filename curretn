@@ -7,6 +7,6 @@ Phase 6  Data types           ✅
 Phase 7  TTL                  ❌
 Phase 8  Persistence          ✅
 Phase 9  Transactions         ✅
-Phase 10 Pub/Sub              ❌
+Phase 10 Pub/Sub              ✅
 Phase 11 Replication          ❌
-Phase 12 Benchmarking         ❌
+Phase 12 Benchmarking         🟡

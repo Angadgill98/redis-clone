@@ -26,17 +26,31 @@ impl RedisServer {
         for addr in addresses{
             let result = match self.Clients.get_mut(&addr) {
                 Some(writer) => {
+                    // let res_with_data = [1u8; 1];
+                    // writer.write_all(&res_with_data).await.unwrap();
+
+                    // let status = [1u8; 1];
+                    // writer.write_all(&status).await.unwrap();
+
+                    // let response_len = (value.len() as u64).to_be_bytes();
+                    // writer.write_all(&response_len).await.unwrap();
+
+                    // writer.write_all(value).await.unwrap();
+
                     let res_with_data = [1u8; 1];
-                    writer.write_all(&res_with_data).await.unwrap();
-
                     let status = [1u8; 1];
-                    writer.write_all(&status).await.unwrap();
-
                     let response_len = (value.len() as u64).to_be_bytes();
-                    writer.write_all(&response_len).await.unwrap();
 
-                    writer.write_all(value).await.unwrap();
+                    let mut buffer = Vec::with_capacity(
+                        1 + 1 + 8 + value.len()
+                    );
 
+                    buffer.extend_from_slice(&res_with_data);
+                    buffer.extend_from_slice(&status);
+                    buffer.extend_from_slice(&response_len);
+                    buffer.extend_from_slice(value);
+
+                    writer.write_all(&buffer).await.unwrap();
                 }
                 None => return,
             };

@@ -1,0 +1,18 @@
+stop   
+sudo systemctl stop redis-server
+
+
+ping 
+redis-cli ping
+
+benchamrk-set adn get 
+redis-benchmark -t set,get -n 10000 -c 1 -q
+
+
+
+start
+sudo systemctl start redis-server
+
+
+to watch mem od device 
+ watch -n 0.5 free -h
