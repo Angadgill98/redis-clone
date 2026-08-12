@@ -1,13 +1,13 @@
 use std::{sync::{Arc}};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{Mutex, oneshot::Sender},
+    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{Mutex, MutexGuard, oneshot::Sender},
 };
 
 use crate::{
     error::ServerError, server::{persistenc::Persistence, redis::{
         self, RedisHash, RedisList, RedisServer, RedisSet, RedisString, RedisValue,
-    }},
+    }, transactions},
 };
 
 pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
@@ -41,7 +41,7 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
 
     loop {
         let (mut stream, client_addr) = socket.accept().await?;
-
+        
         let redis_thread = Arc::clone(&redis);
 
         tokio::spawn(async move {
@@ -71,6 +71,8 @@ async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut TcpStream,clien
         let mut buf = vec![0u8; len];
 
         stream.read_exact(&mut buf).await?;
+
+        // println!("Server: {:?},{}",buf,len);
 
         let (redis_type, command) = Simplify(&buf)?;
 
@@ -182,22 +184,28 @@ fn Simplify(operation: &[u8]) -> Result<(String, String), ServerError> {
 }
 
 async fn HandleType(redis: &Arc<Mutex<RedisServer>>,redis_type: String,command: String) -> Result<Option<Vec<u8>>, ServerError> {
+    let mut redis:MutexGuard<'_, RedisServer>=redis.lock().await;
     match redis_type.trim() {
         "string" => {
-            HandleStringOp(redis, command, String::from("string")).await
+            HandleStringOp(&mut redis, command, String::from("string")).await
         }
 
         "list" => {
-            HandleListOp(redis, command, String::from("list")).await
+            HandleListOp(&mut redis, command, String::from("list")).await
         }
 
         "hash" => {
-            HandleHashOp(redis, command, String::from("hash")).await
+            HandleHashOp(&mut redis, command, String::from("hash")).await
         }
 
         "set" => {
-            HandleSetOp(redis, command, String::from("set")).await
+            HandleSetOp(&mut redis, command, String::from("set")).await
         }
+        "transaction"=>{
+            transactions::HandleTransactions(&mut redis, command).await
+            
+        }
+       
 
         _ => {
             return Err(ServerError::InvalidRedisType(
@@ -212,7 +220,7 @@ async fn HandleType(redis: &Arc<Mutex<RedisServer>>,redis_type: String,command: 
     
 }
 
-async fn HandleStringOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
+pub async fn HandleStringOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -242,7 +250,7 @@ async fn HandleStringOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: Strin
             let key = command.remove(1);
             let value = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
 
             redis.create_string(key, value);
 
@@ -258,7 +266,7 @@ async fn HandleStringOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: Strin
 
             let key = command.remove(1);
 
-            let redis = redis.lock().await;
+            
 
             let redis_value = redis.data
                 .get(&key)
@@ -285,7 +293,7 @@ async fn HandleStringOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: Strin
             let key = command.remove(1);
             let append = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
             let redis_value = redis.data
                 .get_mut(&key)
                 .ok_or_else(|| {
@@ -310,7 +318,7 @@ async fn HandleStringOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: Strin
 
             let key = command.remove(1);
 
-            let redis = redis.lock().await ;
+            
 
             let redis_value = redis.data
                 .get(&key)
@@ -358,7 +366,7 @@ fn GetRedisStingRef(value: &RedisValue) -> Result<&RedisString, ServerError> {
     }
 }
 
-async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
+pub async fn HandleListOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -385,7 +393,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             redis.create_list(key);
@@ -403,7 +411,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
             let key = command.remove(1);
             let value = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -429,7 +437,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
             let key = command.remove(1);
             let value = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -454,7 +462,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -480,7 +488,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -506,7 +514,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -543,7 +551,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
                     "LINDEX index must be a valid number".to_string(),
                 ))?;
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -583,7 +591,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
                     "LSET index must be a valid number".to_string(),
                 ))?;
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -614,7 +622,7 @@ async fn HandleListOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -648,7 +656,7 @@ fn GetRedisList(value: &mut RedisValue) -> Result<&mut RedisList, ServerError> {
     }
 }
 
-async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
+pub async fn HandleHashOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -677,7 +685,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
 
             redis.create_hash(key);
 
@@ -695,7 +703,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
             let field = command.remove(1);
             let value = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
 
             let redis_value = redis.data
                 .get_mut(&key)
@@ -722,7 +730,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
             let key = command.remove(1);
             let field = command.remove(1);
 
-            let redis = redis.lock().await;
+            
 
             let redis_value = redis.data
                 .get(&key)
@@ -755,7 +763,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
             let key = command.remove(1);
             let field = command.remove(1);
 
-            let redis = redis.lock().await
+            
                 ;
 
             let redis_value = redis.data
@@ -783,7 +791,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
             let key = command.remove(1);
             let field = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
 
             let redis_value = redis.data
                 .get_mut(&key)
@@ -809,8 +817,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let redis = redis.lock().await
-                ;
+            
 
             let redis_value = redis.data
                 .get(&key)
@@ -838,7 +845,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
 
             let redis_value = redis.data
                 .get_mut(&key)
@@ -864,8 +871,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let redis = redis.lock().await
-                ;
+            
 
             let redis_value = redis.data
                 .get(&key)
@@ -899,7 +905,7 @@ async fn HandleHashOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String)
 
             let key = command.remove(1);
 
-            let redis = redis.lock().await;
+            
 
             let redis_value = redis.data
                 .get(&key)
@@ -952,7 +958,7 @@ fn GetRedisHashRef(value: &RedisValue) -> Result<&RedisHash, ServerError> {
     }
 }
 
-async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
+pub async fn HandleSetOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -979,7 +985,7 @@ async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) 
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             redis.create_set(key);
@@ -997,7 +1003,7 @@ async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) 
             let key = command.remove(1);
             let value = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -1023,7 +1029,7 @@ async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) 
             let key = command.remove(1);
             let value = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -1049,7 +1055,7 @@ async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) 
             let key = command.remove(1);
             let value = command.remove(1);
 
-            let redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -1075,7 +1081,7 @@ async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) 
 
             let key = command.remove(1);
 
-            let redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -1102,7 +1108,7 @@ async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) 
 
             let key = command.remove(1);
 
-            let mut redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data
@@ -1127,7 +1133,7 @@ async fn HandleSetOp(redis: &Arc<Mutex<RedisServer>>,command: String,t: String) 
 
             let key = command.remove(1);
 
-            let redis = redis.lock().await;
+            
                 
 
             let redis_value = redis.data

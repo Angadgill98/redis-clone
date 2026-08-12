@@ -1,0 +1,12 @@
+Phase 1  TCP                  ✅
+Phase 2  Read/Write           ✅
+Phase 3  Protocol             🟡 Custom protocol done
+Phase 4  Database             ✅
+Phase 5  Multiple clients     ✅
+Phase 6  Data types           ✅
+Phase 7  TTL                  ❌
+Phase 8  Persistence          ✅
+Phase 9  Transactions         ✅
+Phase 10 Pub/Sub              ❌
+Phase 11 Replication          ❌
+Phase 12 Benchmarking         ❌

@@ -21,14 +21,49 @@ fn CreateSocket()->Result<std::net::TcpStream, ServerError>{
 }
 
 pub struct redis_client{
-    socket:TcpStream
+    socket:TcpStream,
+    pub transaction_mode:bool,
+    pub transaction_queue:Vec<String>
 }
 
 impl redis_client {
     fn new(stream: TcpStream) -> Self {
         redis_client {
             socket: stream,
+            transaction_mode:false,
+            transaction_queue:Vec::new()
         }
+    }
+    pub fn HandleTransaction(&mut self)-> Result<Vec<u8>, ServerError>{
+
+        
+        let commands=&self.transaction_queue;
+        let mut buf= Vec::new();
+        let t_bytes = "transaction".as_bytes();
+        let t_len=(t_bytes.len() as u64).to_be_bytes();
+
+        buf.extend_from_slice(&t_len);
+        buf.extend_from_slice(t_bytes);
+        let mut temp=Vec::new();
+        for cmd in commands {
+            let cmd=format!("{}\n",cmd);
+            let cmd=cmd.as_bytes();
+            temp.extend_from_slice(cmd);
+        }
+
+        let temp_len=(temp.len() as u64).to_be_bytes();
+        buf.extend_from_slice(&temp_len);
+        buf.extend_from_slice(&temp);
+
+        let buf_len=(buf.len() as u64).to_be_bytes();
+        let mut final_buf=Vec::new();
+        final_buf.extend_from_slice(&buf_len);
+        final_buf.extend_from_slice(&buf);
+
+        self.socket.write_all(&final_buf).map_err(ServerError::IoErr)?;
+
+        ReadStatus(&mut self.socket)
+        
     }
 
     // ========================================================
