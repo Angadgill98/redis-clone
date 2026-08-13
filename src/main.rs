@@ -63,11 +63,16 @@ async fn main() {
             // }
             //  }
 
-            match benchmark::benchmark_multiple_clients(2) {
-                _ => {
-                    println!("Multi-client benchmark finished");
-                }
+            match benchmark::benchmark_multiple_clients(10, 5) {
+            _ => {
+                println!("Multi-client benchmark finished");
+                println!("Press Enter to exit...");
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).unwrap();
             }
+}
+
 
         }
         Err(e)=>{

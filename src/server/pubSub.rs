@@ -97,7 +97,7 @@ pub async fn HandlePubSub(redis: Arc<RedisServer>,command:String,client_addr:Soc
             }
 
             let key = command.remove(1);
-            redis.subscribe(key, client_addr);
+            redis.subscribe(key, client_addr).await;
         }
 
         "publish" => {

@@ -1,4 +1,4 @@
-use std::{sync::{Arc}};
+use std::{sync::Arc, time::Instant};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::OwnedReadHalf}, sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, oneshot::Sender},
@@ -20,7 +20,7 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
         ))?;
 
     
-    let redis = Arc::new(RedisServer::new());
+    let redis = Arc::new(RedisServer::new().await);
     
     // let mut reconstructor_redis=redis.data.write().await;;
     //for reconstruction from log file
@@ -44,7 +44,8 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
         let (mut reader,writer)=stream.into_split();
         let redis_thread = Arc::clone(&redis);
         
-        redis.Clients
+        redis
+        .Clients
         .write()
         .await
         .insert(client_addr, Arc::new(Mutex::new(writer)));
@@ -354,8 +355,24 @@ pub async fn HandleStringOp(
             let key = command.remove(1);
             let value = command.remove(1);
 
+            let command = format!(
+                "set {} {}",
+                String::from_utf8_lossy(&key),
+                String::from_utf8_lossy(&value)
+            );
+
             redis.create_string(key, value).await;
 
+            redis.log_sender
+            .send(command)
+            .await
+            .map_err(|_| {
+                ServerError::InvalidRedisCommand(
+                    "Log worker stopped".to_string()
+                )
+            })?;
+
+           
             Ok(None)
         }
 

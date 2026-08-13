@@ -12,7 +12,6 @@ use crate::{
 };
 
 const COUNT: usize = 10_000;
-const RUNS: usize = 5;
 
 // ========================================================
 // METRICS
@@ -28,6 +27,21 @@ struct BenchmarkMetrics {
     p50_latency_us: f64,
 }
 
+// ========================================================
+// RUN RESULT
+// ========================================================
+
+#[derive(Clone)]
+struct RunResult {
+    set_metrics: Vec<BenchmarkMetrics>,
+    get_metrics: Vec<BenchmarkMetrics>,
+    mixed_metrics: Vec<BenchmarkMetrics>,
+}
+
+// ========================================================
+// CREATE METRICS
+// ========================================================
+
 fn create_metrics(
     client_id: usize,
     operations: usize,
@@ -37,7 +51,11 @@ fn create_metrics(
     let seconds = elapsed.as_secs_f64();
 
     let average_latency_us =
-        (seconds / operations as f64) * 1_000_000.0;
+        if operations > 0 {
+            (seconds / operations as f64) * 1_000_000.0
+        } else {
+            0.0
+        };
 
     let p50_latency_us = calculate_p50(latencies);
 
@@ -45,7 +63,11 @@ fn create_metrics(
         client_id,
         operations,
         time_ms: seconds * 1000.0,
-        throughput: operations as f64 / seconds,
+        throughput: if seconds > 0.0 {
+            operations as f64 / seconds
+        } else {
+            0.0
+        },
         average_latency_us,
         p50_latency_us,
     }
@@ -86,12 +108,10 @@ fn calculate_p50(latencies: &[Duration]) -> f64 {
 pub fn benchmark(
     redis: &mut redis_client,
 ) -> Result<(), ServerError> {
-
     println!("======================================");
     println!("        Redis Clone Benchmark");
     println!("======================================");
     println!("Commands per test: {}", COUNT);
-    println!("Benchmark runs: {}", RUNS);
     println!();
 
     benchmark_set(redis)?;
@@ -111,6 +131,7 @@ pub fn benchmark(
 
 pub fn benchmark_multiple_clients(
     client_count: usize,
+    runs: usize,
 ) {
     println!("==============================================================");
     println!("             Multi Client Redis Benchmark");
@@ -118,24 +139,136 @@ pub fn benchmark_multiple_clients(
 
     println!("Clients: {}", client_count);
     println!("Commands per test: {}", COUNT);
-    println!("Each client runs each test ONCE");
+    println!("Benchmark runs: {}", runs);
+    println!("Each client runs each test once per run");
     println!();
 
+    if client_count == 0 {
+        println!("Client count must be greater than zero.");
+        return;
+    }
+
+    if runs == 0 {
+        println!("Number of runs must be greater than zero.");
+        return;
+    }
+
     // ========================================================
-    // METRICS STORAGE
+    // STORE ALL RUN RESULTS
     // ========================================================
+
+    let mut all_runs: Vec<RunResult> =
+        Vec::with_capacity(runs);
+
+    // ========================================================
+    // RUN BENCHMARK
+    // ========================================================
+
+    for run in 1..=runs {
+        println!();
+        println!("##############################################################");
+        println!("# RUN {}", run);
+        println!("##############################################################");
+        println!();
+
+        let result =
+            run_multi_client_benchmark(client_count);
+
+        match result {
+            Some(run_result) => {
+                print_metrics_table(
+                    "SET",
+                    &run_result.set_metrics,
+                );
+
+                print_metrics_table(
+                    "GET",
+                    &run_result.get_metrics,
+                );
+
+                print_metrics_table(
+                    "SET + GET",
+                    &run_result.mixed_metrics,
+                );
+
+                all_runs.push(run_result);
+            }
+
+            None => {
+                eprintln!(
+                    "Run {} failed. Stopping benchmark.",
+                    run
+                );
+
+                break;
+            }
+        }
+    }
+
+    if all_runs.is_empty() {
+        println!("No successful benchmark runs.");
+        return;
+    }
+
+    // ========================================================
+    // FINAL COLLECTIVE RESULTS
+    // ========================================================
+
+    print_collective_result(
+        "SET",
+        &all_runs,
+        |run| &run.set_metrics,
+    );
+
+    print_collective_result(
+        "GET",
+        &all_runs,
+        |run| &run.get_metrics,
+    );
+
+    print_collective_result(
+        "SET + GET",
+        &all_runs,
+        |run| &run.mixed_metrics,
+    );
+
+    // ========================================================
+    // WRITE FILE
+    // ========================================================
+
+    write_metrics_to_file(
+        client_count,
+        runs,
+        &all_runs,
+    );
+
+    println!();
+    println!("################################################################");
+    println!("# Benchmark finished");
+    println!();
+    println!("# Results written to benchmark_results.txt");
+    println!("################################################################");
+}
+
+// ========================================================
+// RUN ONE MULTI CLIENT BENCHMARK
+// ========================================================
+
+fn run_multi_client_benchmark(
+    client_count: usize,
+) -> Option<RunResult> {
 
     let set_metrics:
         Arc<Mutex<Vec<BenchmarkMetrics>>> =
-        Arc::new(Mutex::new(Vec::new()));
+        Arc::new(Mutex::new(Vec::with_capacity(client_count)));
 
     let get_metrics:
         Arc<Mutex<Vec<BenchmarkMetrics>>> =
-        Arc::new(Mutex::new(Vec::new()));
+        Arc::new(Mutex::new(Vec::with_capacity(client_count)));
 
     let mixed_metrics:
         Arc<Mutex<Vec<BenchmarkMetrics>>> =
-        Arc::new(Mutex::new(Vec::new()));
+        Arc::new(Mutex::new(Vec::with_capacity(client_count)));
 
     // ========================================================
     // BARRIER
@@ -144,7 +277,7 @@ pub fn benchmark_multiple_clients(
     let barrier =
         Arc::new(Barrier::new(client_count));
 
-    let mut handles = Vec::new();
+    let mut handles = Vec::with_capacity(client_count);
 
     // ========================================================
     // CREATE CLIENTS
@@ -165,7 +298,7 @@ pub fn benchmark_multiple_clients(
             Arc::clone(&mixed_metrics);
 
         let handle =
-            thread::spawn(move || {
+            thread::spawn(move || -> bool {
 
                 let client_number =
                     client_id + 1;
@@ -201,17 +334,19 @@ pub fn benchmark_multiple_clients(
 
                         for i in 0..COUNT {
 
-                            let key = format!(
-                                "client_{}_bench_key_{}",
-                                client_id,
-                                i
-                            );
+                            let key =
+                                format!(
+                                    "client_{}_bench_key_{}",
+                                    client_id,
+                                    i
+                                );
 
-                            let value = format!(
-                                "client_{}_bench_value_{}",
-                                client_id,
-                                i
-                            );
+                            let value =
+                                format!(
+                                    "client_{}_bench_value_{}",
+                                    client_id,
+                                    i
+                                );
 
                             let operation_start =
                                 Instant::now();
@@ -225,7 +360,7 @@ pub fn benchmark_multiple_clients(
                                     e
                                 );
 
-                                return;
+                                return false;
                             }
 
                             latencies.push(
@@ -263,11 +398,12 @@ pub fn benchmark_multiple_clients(
 
                         for i in 0..COUNT {
 
-                            let key = format!(
-                                "client_{}_bench_key_{}",
-                                client_id,
-                                i
-                            );
+                            let key =
+                                format!(
+                                    "client_{}_bench_key_{}",
+                                    client_id,
+                                    i
+                                );
 
                             let operation_start =
                                 Instant::now();
@@ -281,7 +417,7 @@ pub fn benchmark_multiple_clients(
                                     e
                                 );
 
-                                return;
+                                return false;
                             }
 
                             latencies.push(
@@ -319,17 +455,19 @@ pub fn benchmark_multiple_clients(
 
                         for i in 0..COUNT {
 
-                            let key = format!(
-                                "client_{}_mixed_key_{}",
-                                client_id,
-                                i
-                            );
+                            let key =
+                                format!(
+                                    "client_{}_mixed_key_{}",
+                                    client_id,
+                                    i
+                                );
 
-                            let value = format!(
-                                "client_{}_mixed_value_{}",
-                                client_id,
-                                i
-                            );
+                            let value =
+                                format!(
+                                    "client_{}_mixed_value_{}",
+                                    client_id,
+                                    i
+                                );
 
                             // --------------------------
                             // SET
@@ -350,7 +488,7 @@ pub fn benchmark_multiple_clients(
                                     e
                                 );
 
-                                return;
+                                return false;
                             }
 
                             latencies.push(
@@ -373,7 +511,7 @@ pub fn benchmark_multiple_clients(
                                     e
                                 );
 
-                                return;
+                                return false;
                             }
 
                             latencies.push(
@@ -401,6 +539,8 @@ pub fn benchmark_multiple_clients(
                             "Client {}: Benchmark completed",
                             client_number
                         );
+
+                        true
                     }
 
                     Err(e) => {
@@ -410,6 +550,8 @@ pub fn benchmark_multiple_clients(
                             client_number,
                             e
                         );
+
+                        false
                     }
                 }
             });
@@ -418,19 +560,34 @@ pub fn benchmark_multiple_clients(
     }
 
     // ========================================================
-    // WAIT FOR ALL CLIENTS
+    // WAIT FOR THREADS
     // ========================================================
+
+    let mut success = true;
 
     for handle in handles {
 
-        if let Err(e) =
-            handle.join()
-        {
-            eprintln!(
-                "Client thread failed: {:?}",
-                e
-            );
+        match handle.join() {
+
+            Ok(result) => {
+                if !result {
+                    success = false;
+                }
+            }
+
+            Err(e) => {
+                eprintln!(
+                    "Client thread failed: {:?}",
+                    e
+                );
+
+                success = false;
+            }
         }
+    }
+
+    if !success {
+        return None;
     }
 
     // ========================================================
@@ -446,131 +603,27 @@ pub fn benchmark_multiple_clients(
     let mixed_metrics =
         mixed_metrics.lock().unwrap().clone();
 
-    // ========================================================
-    // PRINT TABLES
-    // ========================================================
-
-    print_metrics_table(
-        "SET",
-        &set_metrics,
-    );
-
-    print_metrics_table(
-        "GET",
-        &get_metrics,
-    );
-
-    print_metrics_table(
-        "SET + GET",
-        &mixed_metrics,
-    );
-
-    // ========================================================
-    // WRITE FILE
-    // ========================================================
-
-    write_metrics_to_file(
-        client_count,
-        &set_metrics,
-        &get_metrics,
-        &mixed_metrics,
-    );
-
-    println!();
-    println!("==============================================================");
-    println!("          Multi-client benchmark finished");
-    println!("Results written to benchmark_results.txt");
-    println!("==============================================================");
-}
-
-// ========================================================
-// MULTI CLIENT SET
-// ========================================================
-
-fn benchmark_set_once(
-    redis: &mut redis_client,
-    client_id: usize,
-) -> Result<(), ServerError> {
-
-    for i in 0..COUNT {
-
-        let key = format!(
-            "client_{}_bench_key_{}",
-            client_id,
-            i
+    // Make sure every client produced metrics.
+    if set_metrics.len() != client_count
+        || get_metrics.len() != client_count
+        || mixed_metrics.len() != client_count
+    {
+        eprintln!(
+            "Not all clients produced benchmark metrics."
         );
 
-        let value = format!(
-            "client_{}_bench_value_{}",
-            client_id,
-            i
-        );
-
-        redis.set(key, value)?;
+        return None;
     }
 
-    Ok(())
+    Some(RunResult {
+        set_metrics,
+        get_metrics,
+        mixed_metrics,
+    })
 }
 
 // ========================================================
-// MULTI CLIENT GET
-// ========================================================
-
-fn benchmark_get_once(
-    redis: &mut redis_client,
-    client_id: usize,
-) -> Result<(), ServerError> {
-
-    for i in 0..COUNT {
-
-        let key = format!(
-            "client_{}_bench_key_{}",
-            client_id,
-            i
-        );
-
-        redis.get(key)?;
-    }
-
-    Ok(())
-}
-
-// ========================================================
-// MULTI CLIENT SET + GET
-// ========================================================
-
-fn benchmark_set_get_once(
-    redis: &mut redis_client,
-    client_id: usize,
-) -> Result<(), ServerError> {
-
-    for i in 0..COUNT {
-
-        let key = format!(
-            "client_{}_mixed_key_{}",
-            client_id,
-            i
-        );
-
-        let value = format!(
-            "client_{}_mixed_value_{}",
-            client_id,
-            i
-        );
-
-        redis.set(
-            key.clone(),
-            value,
-        )?;
-
-        redis.get(key)?;
-    }
-
-    Ok(())
-}
-
-// ========================================================
-// PRINT MULTI CLIENT METRICS
+// PRINT METRICS TABLE
 // ========================================================
 
 fn print_metrics_table(
@@ -580,43 +633,16 @@ fn print_metrics_table(
     println!();
 
     println!(
-        "================================================================================"
+        "Client       Operations      Time (ms)       Requests/sec           Avg (us)           p50 (us)"
     );
 
-    println!(
-        "                         {} RESULTS",
-        test_name
-    );
-
-    println!(
-        "================================================================================"
-    );
-
-    println!(
-        "{:<10} {:>12} {:>14} {:>18} {:>18} {:>18}",
-        "Client",
-        "Operations",
-        "Time (ms)",
-        "Requests/sec",
-        "Avg (us)",
-        "p50 (us)"
-    );
-
-    println!(
-        "{:-<10} {:-<12} {:-<14} {:-<18} {:-<18} {:-<18}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        ""
-    );
+    println!();
 
     let mut total_operations = 0usize;
 
     let mut max_time_ms = 0.0;
 
-    let mut total_latency = 0.0;
+    let mut total_average_latency = 0.0;
 
     for metric in metrics {
 
@@ -628,12 +654,12 @@ fn print_metrics_table(
                 metric.time_ms;
         }
 
-        total_latency +=
+        total_average_latency +=
             metric.average_latency_us;
 
         println!(
-            "{:<10} {:>12} {:>14.3} {:>18.2} {:>18.3} {:>18.3}",
-            format!("Client {}", metric.client_id),
+            "Client {:<5} {:>12} {:>14.3} {:>20.2} {:>18.3} {:>18.3}",
+            metric.client_id,
             metric.operations,
             metric.time_ms,
             metric.throughput,
@@ -657,45 +683,28 @@ fn print_metrics_table(
             0.0
         };
 
+    // This is the average latency across clients.
+    // Do NOT divide wall-clock time by all concurrent operations.
     let overall_average_latency =
-        if total_operations > 0 {
-            (total_seconds
-                / total_operations as f64)
-                * 1_000_000.0
-        } else {
-            0.0
-        };
-
-    let average_client_latency =
         if !metrics.is_empty() {
-            total_latency
+            total_average_latency
                 / metrics.len() as f64
         } else {
             0.0
         };
 
-    println!(
-        "{:-<10} {:-<12} {:-<14} {:-<18} {:-<18} {:-<18}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        ""
-    );
+    let overall_p50 =
+        calculate_overall_p50(metrics);
+
+    println!();
 
     println!(
-        "{:<10} {:>12} {:>14.3} {:>18.2} {:>18.3} {:>18.3}",
-        "OVERALL",
+        "# OVERALL {:>14} {:>14.3} {:>20.2} {:>18.3} {:>18.3}",
         total_operations,
         max_time_ms,
         overall_throughput,
-        average_client_latency,
-        calculate_overall_p50(metrics)
-    );
-
-    println!(
-        "================================================================================"
+        overall_average_latency,
+        overall_p50
     );
 }
 
@@ -730,9 +739,10 @@ fn calculate_overall_p50(
 
     if values.len() % 2 == 0 {
 
-        (values[middle - 1]
-            + values[middle])
-            / 2.0
+        (
+            values[middle - 1]
+                + values[middle]
+        ) / 2.0
 
     } else {
 
@@ -741,27 +751,216 @@ fn calculate_overall_p50(
 }
 
 // ========================================================
-// WRITE FILE
+// FINAL COLLECTIVE RESULT
+// ========================================================
+
+fn print_collective_result<F>(
+    test_name: &str,
+    runs: &[RunResult],
+    get_metrics: F,
+)
+where
+    F: Fn(&RunResult) -> &Vec<BenchmarkMetrics>,
+{
+    println!();
+    println!("################################################################");
+    println!("# FINAL COLLECTIVE RESULT: {}", test_name);
+    println!("################################################################");
+    println!();
+
+    if runs.is_empty() {
+        println!("No successful runs.");
+        return;
+    }
+
+    let mut total_operations = 0usize;
+
+    let mut total_time_ms = 0.0;
+
+    let mut total_throughput = 0.0;
+
+    let mut total_average_latency = 0.0;
+
+    let mut all_p50_values = Vec::new();
+
+    for run in runs {
+
+        let metrics =
+            get_metrics(run);
+
+        if metrics.is_empty() {
+            continue;
+        }
+
+        let mut run_operations = 0usize;
+
+        let mut run_max_time_ms = 0.0;
+
+        let mut run_average_latency = 0.0;
+
+        for metric in metrics {
+
+            run_operations +=
+                metric.operations;
+
+            if metric.time_ms > run_max_time_ms {
+                run_max_time_ms =
+                    metric.time_ms;
+            }
+
+            run_average_latency +=
+                metric.average_latency_us;
+
+            all_p50_values.push(
+                metric.p50_latency_us
+            );
+        }
+
+        run_average_latency /=
+            metrics.len() as f64;
+
+        let run_seconds =
+            run_max_time_ms / 1000.0;
+
+        let run_throughput =
+            if run_seconds > 0.0 {
+                run_operations as f64
+                    / run_seconds
+            } else {
+                0.0
+            };
+
+        total_operations +=
+            run_operations;
+
+        total_time_ms +=
+            run_max_time_ms;
+
+        total_throughput +=
+            run_throughput;
+
+        total_average_latency +=
+            run_average_latency;
+    }
+
+    let successful_runs =
+        runs.len() as f64;
+
+    // ========================================================
+    // AVERAGES ACROSS RUNS
+    // ========================================================
+
+    let average_operations =
+        total_operations as f64
+            / successful_runs;
+
+    let average_time_ms =
+        total_time_ms
+            / successful_runs;
+
+    let average_throughput =
+        total_throughput
+            / successful_runs;
+
+    let average_latency =
+        total_average_latency
+            / successful_runs;
+
+    // ========================================================
+    // COLLECTIVE P50
+    // ========================================================
+
+    all_p50_values.sort_by(|a, b|
+        a.partial_cmp(b)
+            .unwrap()
+    );
+
+    let collective_p50 =
+        if all_p50_values.is_empty() {
+
+            0.0
+
+        } else {
+
+            let middle =
+                all_p50_values.len() / 2;
+
+            if all_p50_values.len() % 2 == 0 {
+
+                (
+                    all_p50_values[middle - 1]
+                        + all_p50_values[middle]
+                ) / 2.0
+
+            } else {
+
+                all_p50_values[middle]
+            }
+        };
+
+    // ========================================================
+    // PRINT
+    // ========================================================
+
+    println!(
+        "Runs:                    {}",
+        runs.len()
+    );
+
+    println!(
+        "Operations per run:     {:.0}",
+        average_operations
+    );
+
+    println!(
+        "Total operations:       {}",
+        total_operations
+    );
+
+    println!(
+        "Average time:            {:.3} ms",
+        average_time_ms
+    );
+
+    println!(
+        "Average throughput:      {:.2} ops/sec",
+        average_throughput
+    );
+
+    println!(
+        "Average latency:         {:.3} us",
+        average_latency
+    );
+
+    println!(
+        "Collective p50:          {:.3} us",
+        collective_p50
+    );
+
+    println!();
+}
+
+// ========================================================
+// WRITE ALL RESULTS TO FILE
 // ========================================================
 
 fn write_metrics_to_file(
     client_count: usize,
-    set_metrics: &[BenchmarkMetrics],
-    get_metrics: &[BenchmarkMetrics],
-    mixed_metrics: &[BenchmarkMetrics],
+    runs_requested: usize,
+    all_runs: &[RunResult],
 ) {
     let mut file =
         match OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open("benchmark_results.txt")
+            .open("benchmark_results.md")
         {
             Ok(file) => file,
 
             Err(e) => {
                 eprintln!(
-                    "Failed to create benchmark_results.txt: {}",
+                    "Failed to create benchmark_results.md: {}",
                     e
                 );
 
@@ -771,17 +970,17 @@ fn write_metrics_to_file(
 
     writeln!(
         file,
-        "================================================================================"
+        "################################################################"
     ).unwrap();
 
     writeln!(
         file,
-        "                    MULTI CLIENT REDIS BENCHMARK"
+        "# MULTI CLIENT REDIS BENCHMARK"
     ).unwrap();
 
     writeln!(
         file,
-        "================================================================================"
+        "################################################################"
     ).unwrap();
 
     writeln!(
@@ -798,47 +997,104 @@ fn write_metrics_to_file(
 
     writeln!(
         file,
-        "Each client runs each test ONCE"
+        "Benchmark runs: {}",
+        runs_requested
+    ).unwrap();
+
+    writeln!(
+        file,
+        "Successful runs: {}",
+        all_runs.len()
     ).unwrap();
 
     writeln!(file).unwrap();
 
-    write_metrics_section(
+    // ========================================================
+    // WRITE EACH RUN
+    // ========================================================
+
+    for (index, run) in all_runs.iter().enumerate() {
+
+        writeln!(
+            file,
+            "################################################################"
+        ).unwrap();
+
+        writeln!(
+            file,
+            "# RUN {}",
+            index + 1
+        ).unwrap();
+
+        writeln!(
+            file,
+            "################################################################"
+        ).unwrap();
+
+        writeln!(file).unwrap();
+
+        write_metrics_section(
+            &mut file,
+            "SET",
+            &run.set_metrics,
+        );
+
+        write_metrics_section(
+            &mut file,
+            "GET",
+            &run.get_metrics,
+        );
+
+        write_metrics_section(
+            &mut file,
+            "SET + GET",
+            &run.mixed_metrics,
+        );
+    }
+
+    // ========================================================
+    // FINAL COLLECTIVE RESULTS
+    // ========================================================
+
+    write_collective_result(
         &mut file,
         "SET",
-        set_metrics,
+        all_runs,
+        |run| &run.set_metrics,
     );
 
-    write_metrics_section(
+    write_collective_result(
         &mut file,
         "GET",
-        get_metrics,
+        all_runs,
+        |run| &run.get_metrics,
     );
 
-    write_metrics_section(
+    write_collective_result(
         &mut file,
         "SET + GET",
-        mixed_metrics,
+        all_runs,
+        |run| &run.mixed_metrics,
     );
 
     writeln!(
         file,
-        "================================================================================"
+        "################################################################"
     ).unwrap();
 
     writeln!(
         file,
-        "Benchmark finished successfully."
+        "# Benchmark finished"
     ).unwrap();
 
     writeln!(
         file,
-        "================================================================================"
+        "################################################################"
     ).unwrap();
 }
 
 // ========================================================
-// WRITE ONE SECTION
+// WRITE ONE RUN SECTION
 // ========================================================
 
 fn write_metrics_section(
@@ -848,41 +1104,10 @@ fn write_metrics_section(
 ) {
     writeln!(
         file,
-        "================================================================================"
+        "Client       Operations      Time (ms)       Requests/sec           Avg (us)           p50 (us)"
     ).unwrap();
 
-    writeln!(
-        file,
-        "                         {} RESULTS",
-        test_name
-    ).unwrap();
-
-    writeln!(
-        file,
-        "================================================================================"
-    ).unwrap();
-
-    writeln!(
-        file,
-        "{:<10} {:>12} {:>14} {:>18} {:>18} {:>18}",
-        "Client",
-        "Operations",
-        "Time (ms)",
-        "Requests/sec",
-        "Avg (us)",
-        "p50 (us)"
-    ).unwrap();
-
-    writeln!(
-        file,
-        "{:-<10} {:-<12} {:-<14} {:-<18} {:-<18} {:-<18}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        ""
-    ).unwrap();
+    writeln!(file).unwrap();
 
     let mut total_operations = 0usize;
 
@@ -905,8 +1130,8 @@ fn write_metrics_section(
 
         writeln!(
             file,
-            "{:<10} {:>12} {:>14.3} {:>18.2} {:>18.3} {:>18.3}",
-            format!("Client {}", metric.client_id),
+            "Client {:<5} {:>12} {:>14.3} {:>20.2} {:>18.3} {:>18.3}",
+            metric.client_id,
             metric.operations,
             metric.time_ms,
             metric.throughput,
@@ -914,10 +1139,6 @@ fn write_metrics_section(
             metric.p50_latency_us
         ).unwrap();
     }
-
-    // ========================================================
-    // OVERALL
-    // ========================================================
 
     let total_seconds =
         max_time_ms / 1000.0;
@@ -931,15 +1152,6 @@ fn write_metrics_section(
         };
 
     let overall_average_latency =
-        if total_operations > 0 {
-            (total_seconds
-                / total_operations as f64)
-                * 1_000_000.0
-        } else {
-            0.0
-        };
-
-    let average_client_latency =
         if !metrics.is_empty() {
             total_average_latency
                 / metrics.len() as f64
@@ -950,31 +1162,218 @@ fn write_metrics_section(
     let overall_p50 =
         calculate_overall_p50(metrics);
 
-    writeln!(
-        file,
-        "{:-<10} {:-<12} {:-<14} {:-<18} {:-<18} {:-<18}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        ""
-    ).unwrap();
+    writeln!(file).unwrap();
 
     writeln!(
         file,
-        "{:<10} {:>12} {:>14.3} {:>18.2} {:>18.3} {:>18.3}",
-        "OVERALL",
+        "# OVERALL {:>14} {:>14.3} {:>20.2} {:>18.3} {:>18.3}",
         total_operations,
         max_time_ms,
         overall_throughput,
-        average_client_latency,
+        overall_average_latency,
         overall_p50
+    ).unwrap();
+
+    writeln!(file).unwrap();
+}
+
+// ========================================================
+// WRITE COLLECTIVE RESULT
+// ========================================================
+
+fn write_collective_result<F>(
+    file: &mut std::fs::File,
+    test_name: &str,
+    runs: &[RunResult],
+    get_metrics: F,
+)
+where
+    F: Fn(&RunResult) -> &Vec<BenchmarkMetrics>,
+{
+    writeln!(file).unwrap();
+
+    writeln!(
+        file,
+        "################################################################"
     ).unwrap();
 
     writeln!(
         file,
-        "================================================================================"
+        "# FINAL COLLECTIVE RESULT: {}",
+        test_name
+    ).unwrap();
+
+    writeln!(
+        file,
+        "################################################################"
+    ).unwrap();
+
+    if runs.is_empty() {
+        writeln!(
+            file,
+            "No successful runs."
+        ).unwrap();
+
+        return;
+    }
+
+    let mut total_operations = 0usize;
+
+    let mut total_time_ms = 0.0;
+
+    let mut total_throughput = 0.0;
+
+    let mut total_average_latency = 0.0;
+
+    let mut all_p50_values = Vec::new();
+
+    for run in runs {
+
+        let metrics =
+            get_metrics(run);
+
+        if metrics.is_empty() {
+            continue;
+        }
+
+        let mut run_operations = 0usize;
+
+        let mut run_max_time_ms = 0.0;
+
+        let mut run_average_latency = 0.0;
+
+        for metric in metrics {
+
+            run_operations +=
+                metric.operations;
+
+            if metric.time_ms > run_max_time_ms {
+                run_max_time_ms =
+                    metric.time_ms;
+            }
+
+            run_average_latency +=
+                metric.average_latency_us;
+
+            all_p50_values.push(
+                metric.p50_latency_us
+            );
+        }
+
+        run_average_latency /=
+            metrics.len() as f64;
+
+        let run_seconds =
+            run_max_time_ms / 1000.0;
+
+        let run_throughput =
+            if run_seconds > 0.0 {
+                run_operations as f64
+                    / run_seconds
+            } else {
+                0.0
+            };
+
+        total_operations +=
+            run_operations;
+
+        total_time_ms +=
+            run_max_time_ms;
+
+        total_throughput +=
+            run_throughput;
+
+        total_average_latency +=
+            run_average_latency;
+    }
+
+    let run_count =
+        runs.len() as f64;
+
+    let average_operations =
+        total_operations as f64
+            / run_count;
+
+    let average_time_ms =
+        total_time_ms
+            / run_count;
+
+    let average_throughput =
+        total_throughput
+            / run_count;
+
+    let average_latency =
+        total_average_latency
+            / run_count;
+
+    all_p50_values.sort_by(|a, b|
+        a.partial_cmp(b)
+            .unwrap()
+    );
+
+    let collective_p50 =
+        if all_p50_values.is_empty() {
+
+            0.0
+
+        } else {
+
+            let middle =
+                all_p50_values.len() / 2;
+
+            if all_p50_values.len() % 2 == 0 {
+
+                (
+                    all_p50_values[middle - 1]
+                        + all_p50_values[middle]
+                ) / 2.0
+
+            } else {
+
+                all_p50_values[middle]
+            }
+        };
+
+    writeln!(
+        file,
+        "Runs:                    {}",
+        runs.len()
+    ).unwrap();
+
+    writeln!(
+        file,
+        "Operations per run:      {:.0}",
+        average_operations
+    ).unwrap();
+
+    writeln!(
+        file,
+        "Total operations:        {}",
+        total_operations
+    ).unwrap();
+
+    writeln!(
+        file,
+        "Average time:            {:.3} ms",
+        average_time_ms
+    ).unwrap();
+
+    writeln!(
+        file,
+        "Average throughput:      {:.2} ops/sec",
+        average_throughput
+    ).unwrap();
+
+    writeln!(
+        file,
+        "Average latency:         {:.3} us",
+        average_latency
+    ).unwrap();
+
+    writeln!(
+        file,
+        "Collective p50:          {:.3} us",
+        collective_p50
     ).unwrap();
 
     writeln!(file).unwrap();
@@ -995,40 +1394,26 @@ fn benchmark_set(
     println!("SET Benchmark");
     println!("======================================");
 
-    for run in 1..=RUNS {
+    for i in 0..COUNT {
+
+        let key =
+            format!("bench_key_{}", i);
+
+        let value =
+            format!("bench_value_{}", i);
 
         let start =
             Instant::now();
 
-        for i in 0..COUNT {
+        redis.set(key, value)?;
 
-            let key =
-                format!("bench_key_{}", i);
-
-            let value =
-                format!("bench_value_{}", i);
-
-            redis.set(key, value)?;
-        }
-
-        let elapsed =
+        total_time +=
             start.elapsed();
-
-        total_time += elapsed;
-
-        print_run_result(
-            "SET",
-            run,
-            elapsed,
-            COUNT,
-        );
     }
 
-    print_final_result(
-        "SET",
-        total_time,
-        COUNT,
-        RUNS,
+    println!(
+        "Total time: {:.3} ms",
+        total_time.as_secs_f64() * 1000.0
     );
 
     Ok(())
@@ -1049,37 +1434,23 @@ fn benchmark_get(
     println!("GET Benchmark");
     println!("======================================");
 
-    for run in 1..=RUNS {
+    for i in 0..COUNT {
+
+        let key =
+            format!("bench_key_{}", i);
 
         let start =
             Instant::now();
 
-        for i in 0..COUNT {
+        redis.get(key)?;
 
-            let key =
-                format!("bench_key_{}", i);
-
-            redis.get(key)?;
-        }
-
-        let elapsed =
+        total_time +=
             start.elapsed();
-
-        total_time += elapsed;
-
-        print_run_result(
-            "GET",
-            run,
-            elapsed,
-            COUNT,
-        );
     }
 
-    print_final_result(
-        "GET",
-        total_time,
-        COUNT,
-        RUNS,
+    println!(
+        "Total time: {:.3} ms",
+        total_time.as_secs_f64() * 1000.0
     );
 
     Ok(())
@@ -1100,171 +1471,32 @@ fn benchmark_set_get(
     println!("SET + GET Benchmark");
     println!("======================================");
 
-    for run in 1..=RUNS {
+    for i in 0..COUNT {
+
+        let key =
+            format!("mixed_key_{}", i);
+
+        let value =
+            format!("mixed_value_{}", i);
 
         let start =
             Instant::now();
 
-        for i in 0..COUNT {
+        redis.set(
+            key.clone(),
+            value,
+        )?;
 
-            let key =
-                format!("mixed_key_{}", i);
+        redis.get(key)?;
 
-            let value =
-                format!("mixed_value_{}", i);
-
-            redis.set(
-                key.clone(),
-                value,
-            )?;
-
-            redis.get(key)?;
-        }
-
-        let elapsed =
+        total_time +=
             start.elapsed();
-
-        total_time += elapsed;
-
-        print_run_result(
-            "SET + GET",
-            run,
-            elapsed,
-            COUNT * 2,
-        );
     }
 
-    print_final_result(
-        "SET + GET",
-        total_time,
-        COUNT * 2,
-        RUNS,
+    println!(
+        "Total time: {:.3} ms",
+        total_time.as_secs_f64() * 1000.0
     );
 
     Ok(())
-}
-
-// ========================================================
-// PRINT SINGLE CLIENT RUN
-// ========================================================
-
-fn print_run_result(
-    name: &str,
-    run: usize,
-    elapsed: Duration,
-    operations: usize,
-) {
-    let seconds =
-        elapsed.as_secs_f64();
-
-    let operations_f64 =
-        operations as f64;
-
-    println!(
-        "--------------------------------------"
-    );
-
-    println!(
-        "Test: {} | Run: {}",
-        name,
-        run
-    );
-
-    println!(
-        "Operations: {}",
-        operations
-    );
-
-    println!(
-        "Time: {:.3} ms",
-        seconds * 1000.0
-    );
-
-    println!(
-        "Throughput: {:.2} ops/sec",
-        operations_f64 / seconds
-    );
-
-    println!(
-        "Average latency: {:.3} us",
-        (seconds / operations_f64)
-            * 1_000_000.0
-    );
-
-    println!(
-        "--------------------------------------"
-    );
-}
-
-// ========================================================
-// PRINT SINGLE CLIENT FINAL
-// ========================================================
-
-fn print_final_result(
-    name: &str,
-    total_time: Duration,
-    operations_per_run: usize,
-    runs: usize,
-) {
-    let total_seconds =
-        total_time.as_secs_f64();
-
-    let average_seconds =
-        total_seconds / runs as f64;
-
-    let operations =
-        operations_per_run as f64;
-
-    let average_throughput =
-        operations / average_seconds;
-
-    let average_latency =
-        (average_seconds / operations)
-            * 1_000_000.0;
-
-    println!();
-
-    println!(
-        "****************************************"
-    );
-
-    println!(
-        "FINAL RESULT: {}",
-        name
-    );
-
-    println!(
-        "****************************************"
-    );
-
-    println!(
-        "Runs: {}",
-        runs
-    );
-
-    println!(
-        "Operations per run: {}",
-        operations_per_run
-    );
-
-    println!(
-        "Average time: {:.3} ms",
-        average_seconds * 1000.0
-    );
-
-    println!(
-        "Average throughput: {:.2} ops/sec",
-        average_throughput
-    );
-
-    println!(
-        "Average latency: {:.3} us",
-        average_latency
-    );
-
-    println!(
-        "****************************************"
-    );
-
-    println!();
 }

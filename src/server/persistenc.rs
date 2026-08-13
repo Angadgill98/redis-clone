@@ -1,6 +1,8 @@
-use std::{collections::HashMap, fs::OpenOptions, io::Write};
+use std::{collections::HashMap, fs::OpenOptions, io::Write, sync::Arc, time::Instant};
 
-use crate::{error::ServerError, server::redis::{RedisHash, RedisList, RedisSet, RedisString, RedisValue}};
+use tokio::{io::AsyncWriteExt, sync::mpsc};
+
+use crate::{error::ServerError, server::redis::{RedisHash, RedisList, RedisServer, RedisSet, RedisString, RedisValue}};
 
 
 
@@ -13,6 +15,7 @@ pub fn WriteToLog(command:String) {
     let mut file = create_if_not_exists("redis.log").unwrap();
 
     file.write_all(content.as_bytes()).unwrap();
+   
 }
 
 pub fn ReadLog()->String {
@@ -230,4 +233,235 @@ fn create_if_not_exists(path: &str) -> Result<std::fs::File,Box<dyn std::error::
 
     Ok(file)
 }
+
+
+// pub fn start_logger() -> mpsc::Sender<String> {
+//     let (tx, mut rx) = mpsc::channel::<String>(1_000);
+
+//     tokio::spawn(async move {
+//         let mut file = match tokio::fs::OpenOptions::new()
+//             .create(true)
+//             .append(true)
+//             .open("redis.log")
+//             .await
+//         {
+//             Ok(file) => file,
+
+//             Err(e) => {
+//                 eprintln!("Failed to open redis.log: {}", e);
+//                 return;
+//             }
+//         };
+
+//         let mut batch = Vec::with_capacity(1000);
+
+//         while let Some(command) = rx.recv().await {
+//             batch.push(command);
+
+           
+//             while batch.len() < 1000 {
+//                 match rx.try_recv() {
+//                     Ok(command) => {
+//                         batch.push(command);
+//                     }
+
+//                     Err(_) => {
+//                         break;
+//                     }
+//                 }
+//             }
+
+//             // Build one buffer
+//             let mut buffer = Vec::new();
+
+//             for command in batch.drain(..) {
+//                 buffer.extend_from_slice(command.as_bytes());
+//                 buffer.push(b'\n');
+//             }
+
+//             // One filesystem write for the entire batch
+//             if let Err(e) = file.write_all(&buffer).await {
+//                 eprintln!("Failed to write log: {}", e);
+//             }
+//         }
+
+//         if let Err(e) = file.flush().await {
+//             eprintln!("Failed to flush log: {}", e);
+//         }
+//     });
+
+//     tx
+// }
+
+
+
+
+// pub fn start_logger() -> mpsc::Sender<String> {
+//     let (tx, mut rx) = mpsc::channel::<String>(1_000);
+
+//     tokio::spawn(async move {
+//         let mut file = match tokio::fs::OpenOptions::new()
+//             .create(true)
+//             .append(true)
+//             .open("redis.log")
+//             .await
+//         {
+//             Ok(file) => file,
+
+//             Err(e) => {
+//                 eprintln!("Failed to open redis.log: {}", e);
+//                 return;
+//             }
+//         };
+
+//         let mut batch = Vec::with_capacity(1000);
+//         let mut buffer = Vec::with_capacity(64 * 1024);
+
+//         let mut total_write_time = std::time::Duration::ZERO;
+//         let mut total_bytes = 0usize;
+//         let mut total_writes = 0usize;
+
+//         while let Some(command) = rx.recv().await {
+//             batch.push(command);
+
+//             while batch.len() < 1000 {
+//                 match rx.try_recv() {
+//                     Ok(command) => {
+//                         batch.push(command);
+//                     }
+
+//                     Err(_) => {
+//                         break;
+//                     }
+//                 }
+//             }
+
+//             buffer.clear();
+
+//             for command in batch.drain(..) {
+//                 buffer.extend_from_slice(command.as_bytes());
+//                 buffer.push(b'\n');
+//             }
+
+//             let start = Instant::now();
+
+//             if let Err(e) = file.write_all(&buffer).await {
+//                 eprintln!("Failed to write log: {}", e);
+//                 continue;
+//             }
+
+//             let elapsed = start.elapsed();
+
+//             total_write_time += elapsed;
+//             total_bytes += buffer.len();
+//             total_writes += 1;
+//             println!(
+//             "Logger finished: {} writes, {} bytes, total write time: {:?}",
+//             total_writes,
+//             total_bytes,
+//             total_write_time
+//         );
+//         }
+
+//         if let Err(e) = file.flush().await {
+//             eprintln!("Failed to flush log: {}", e);
+//         }
+
+        
+//     });
+
+//     tx
+// }
+
+
+pub fn start_logger() -> mpsc::Sender<String> {
+    let (tx, mut rx) = mpsc::channel::<String>(10_000);
+
+    tokio::spawn(async move {
+        let mut file = match tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("redis.log")
+            .await
+        {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("Failed to open redis.log: {}", e);
+                return;
+            }
+        };
+
+        let mut buffer = Vec::with_capacity(64 * 1024);
+
+        loop {
+            // Wait for the first command.
+            let first = match rx.recv().await {
+                Some(command) => command,
+                None => break,
+            };
+
+            buffer.clear();
+
+            buffer.extend_from_slice(first.as_bytes());
+            buffer.push(b'\n');
+
+            // Give the channel a short window to accumulate more commands.
+            let deadline =
+                tokio::time::sleep(std::time::Duration::from_millis(1));
+
+            tokio::pin!(deadline);
+
+            loop {
+                tokio::select! {
+                    command = rx.recv() => {
+                        match command {
+                            Some(command) => {
+                                buffer.extend_from_slice(command.as_bytes());
+                                buffer.push(b'\n');
+
+                                // Don't let the batch become too large.
+                                if buffer.len() >= 64 * 1024 {
+                                    break;
+                                }
+                            }
+
+                            None => {
+                                break;
+                            }
+                        }
+                    }
+
+                    _ = &mut deadline => {
+                        break;
+                    }
+                }
+            }
+
+            // let start = Instant::now();
+
+            if let Err(e) = file.write_all(&buffer).await {
+                eprintln!("Failed to write log: {}", e);
+                continue;
+            }
+
+            // let elapsed = start.elapsed();
+
+            // println!(
+            //     "Logger: wrote {} bytes in {:?}",
+            //     buffer.len(),
+            //     elapsed
+            // );
+        }
+
+        if let Err(e) = file.flush().await {
+            eprintln!("Failed to flush log: {}", e);
+        }
+    });
+
+    tx
+}
+
+
+
+
 

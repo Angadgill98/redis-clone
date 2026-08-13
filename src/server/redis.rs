@@ -1,13 +1,13 @@
 use core::hash;
-use std::{collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Write}, net::SocketAddr, sync::Arc};
+use std::{collections::{HashMap, HashSet, VecDeque}, net::SocketAddr, sync::Arc};
 
 
 
 
 
-use tokio::{net::tcp::OwnedWriteHalf, sync::{Mutex, RwLock}};
+use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf, sync::{Mutex, RwLock}};
 
-use crate::{error::ServerError};
+use crate::{error::ServerError, server::persistenc};
 
 #[derive(Debug)]
 pub enum RedisValue {
@@ -19,7 +19,8 @@ pub enum RedisValue {
 }
 
 #[derive(Debug)]
-pub struct RedisServer {pub data: RwLock<HashMap<Vec<u8>, Arc<RwLock<RedisValue>>>>,pub Channels:RwLock<HashMap<Vec<u8>,RwLock<HashSet<SocketAddr>>>>,pub Clients: RwLock<HashMap<SocketAddr, Arc<Mutex<OwnedWriteHalf>>>>}
+pub struct RedisServer {pub data: RwLock<HashMap<Vec<u8>, Arc<RwLock<RedisValue>>>>,pub Channels:RwLock<HashMap<Vec<u8>,RwLock<HashSet<SocketAddr>>>>,
+    pub Clients: RwLock<HashMap<SocketAddr, Arc<Mutex<OwnedWriteHalf>>>>, pub log_sender: tokio::sync::mpsc::Sender<String>}
 
 
 
@@ -43,11 +44,13 @@ pub struct RedisSet {data: HashSet<Vec<u8>>}
 //
 
 impl RedisServer {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
+        let log_sender = persistenc::start_logger();
         Self {
             data: RwLock::new(HashMap::new()),
             Channels: RwLock::new(HashMap::new()),
-            Clients: RwLock::new(HashMap::new())
+            Clients: RwLock::new(HashMap::new()),
+            log_sender,
         }
     }
 
