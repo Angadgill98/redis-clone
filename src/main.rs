@@ -52,7 +52,8 @@ async fn main() {
         Ok((mut redis))=>{
             println!("Server:Acquried hte cleint connection");
 
-            cli::run(&mut redis);   
+            // cli::run(&mut redis);   
+ 
             // match benchmark::benchmark(&mut redis) {
             // Ok(()) => {
             //     println!("Benchmark completed successfully");
@@ -61,6 +62,12 @@ async fn main() {
             //     eprintln!("Benchmark failed: {}", e);
             // }
             //  }
+
+            match benchmark::benchmark_multiple_clients(2) {
+                _ => {
+                    println!("Multi-client benchmark finished");
+                }
+            }
 
         }
         Err(e)=>{

@@ -1,41 +1,36 @@
-use std::{collections::HashSet, net::SocketAddr};
+use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 
-use tokio::{io::AsyncWriteExt, sync::MutexGuard};
+use tokio::{io::AsyncWriteExt, sync::{MutexGuard, RwLock}};
 
 use crate::{error::ServerError, server::redis::RedisServer};
 
 
 impl RedisServer {
-    fn subscribe(&mut self,key:Vec<u8>,client_addr:SocketAddr){
+    async fn subscribe(&self,key:Vec<u8>,client_addr:SocketAddr){
+        
+
         self.Channels
-        .entry(key)
-        .or_insert_with(HashSet::new)
-        .insert(client_addr);
+            .write().await
+            .entry(key)
+            .or_insert_with(|| RwLock::new(HashSet::new()))
+            .write()
+            .await
+            .insert(client_addr);
     }
     
     
-    async fn publish(&mut self, key: Vec<u8>, value: Vec<u8>) {
-        let mut addresses = match self.Channels.get(&key) {
-            Some(addresses) => addresses.iter().copied().collect::<Vec<_>>(),
+    async fn publish(&self, key: Vec<u8>, value: Vec<u8>) {
+        let mut addresses = match self.Channels.read().await.get(&key) {
+            Some(addresses) => addresses.read().await.iter().copied().collect::<Vec<_>>(),
             None => return,
         };
 
         self.broadcast(&mut addresses,&value,&key).await;
     }
-    async fn broadcast(&mut self,addresses: &mut Vec<SocketAddr>,value: &[u8],key: &Vec<u8>) {
+    async fn broadcast(&self,addresses: &mut Vec<SocketAddr>,value: &[u8],key: &Vec<u8>) {
         for addr in addresses{
-            let result = match self.Clients.get_mut(&addr) {
+            let result = match self.Clients.write().await.get_mut(&addr) {
                 Some(writer) => {
-                    // let res_with_data = [1u8; 1];
-                    // writer.write_all(&res_with_data).await.unwrap();
-
-                    // let status = [1u8; 1];
-                    // writer.write_all(&status).await.unwrap();
-
-                    // let response_len = (value.len() as u64).to_be_bytes();
-                    // writer.write_all(&response_len).await.unwrap();
-
-                    // writer.write_all(value).await.unwrap();
 
                     let res_with_data = [1u8; 1];
                     let status = [1u8; 1];
@@ -50,26 +45,30 @@ impl RedisServer {
                     buffer.extend_from_slice(&response_len);
                     buffer.extend_from_slice(value);
 
-                    writer.write_all(&buffer).await.unwrap();
+                    writer.lock().await.write_all(&buffer).await.unwrap();
                 }
                 None => return,
             };
         }
     }
     
-    fn unsubscribe(&mut self,key:Vec<u8>,client_addr:SocketAddr){
-        if let Some(clients) = self.Channels.get_mut(&key) {
-            clients.remove(&client_addr);
+    async fn unsubscribe(&self,key:Vec<u8>,client_addr:SocketAddr){
+        let mut guard=self.Channels.write().await;
+        let ischannel=guard.get_mut(&key);
+        match ischannel {
+            Some(clients) => {
+                // channel exists
+                clients.write().await.remove(&client_addr);
+            }
 
-            if clients.is_empty() {
-                self.Channels.remove(&key);
+            None => {
+                // channel doesn't exist
             }
         }
-
     }
 }
 
-pub async fn HandlePubSub(redis: &mut MutexGuard<'_,RedisServer>,command:String,client_addr:SocketAddr)-> Result<Option<Vec<u8>>, ServerError> {
+pub async fn HandlePubSub(redis: Arc<RedisServer>,command:String,client_addr:SocketAddr)-> Result<Option<Vec<u8>>, ServerError> {
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -122,7 +121,7 @@ pub async fn HandlePubSub(redis: &mut MutexGuard<'_,RedisServer>,command:String,
             }
 
             let key = command.remove(1);
-            redis.unsubscribe(key, client_addr);
+            redis.unsubscribe(key, client_addr).await;
         }
 
         _ => {

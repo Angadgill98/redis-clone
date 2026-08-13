@@ -19,7 +19,7 @@ use crate::{error::ServerError, server::{init::{HandleHashOp, HandleListOp, Hand
 // }
 
 
-pub async fn HandleTransactions(redis: &mut MutexGuard<'_, RedisServer>, transaction_queue:String)->Result<Option<Vec<u8>>, ServerError> {
+pub async fn HandleTransactions(redis: Arc<RedisServer>, transaction_queue:String)->Result<Option<Vec<u8>>, ServerError> {
     let mut responses: Vec<Result<Option<Vec<u8>>, ServerError>> = Vec::new();
 
     for command in transaction_queue.lines() {
@@ -33,7 +33,7 @@ pub async fn HandleTransactions(redis: &mut MutexGuard<'_, RedisServer>, transac
         let response = match t.trim() {
             "string" => {
                 HandleStringOp(
-                    redis,
+                    Arc::clone(&redis),
                     operation.to_string(),
                     String::from("string"),
                 ).await
@@ -41,7 +41,7 @@ pub async fn HandleTransactions(redis: &mut MutexGuard<'_, RedisServer>, transac
 
             "list" => {
                 HandleListOp(
-                    redis,
+                    Arc::clone(&redis),
                     operation.to_string(),
                     String::from("list"),
                 ).await
@@ -49,7 +49,7 @@ pub async fn HandleTransactions(redis: &mut MutexGuard<'_, RedisServer>, transac
 
             "hash" => {
                 HandleHashOp(
-                    redis,
+                    Arc::clone(&redis),
                     operation.to_string(),
                     String::from("hash"),
                 ).await
@@ -57,7 +57,7 @@ pub async fn HandleTransactions(redis: &mut MutexGuard<'_, RedisServer>, transac
 
             "set" => {
                 HandleSetOp(
-                    redis,
+                    Arc::clone(&redis),
                     operation.to_string(),
                     String::from("set"),
                 ).await

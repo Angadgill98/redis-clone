@@ -1,11 +1,11 @@
 use std::{sync::{Arc}};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::OwnedReadHalf}, sync::{Mutex, MutexGuard, oneshot::Sender},
+    io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, tcp::OwnedReadHalf}, sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, oneshot::Sender},
 };
 
 use crate::{
-    error::ServerError, server::{persistenc::Persistence, pubSub, redis::{
+    error::ServerError, server::{ persistenc, pubSub, redis::{
         self, RedisHash, RedisList, RedisServer, RedisSet, RedisString, RedisValue,
     }, transactions},
 };
@@ -20,9 +20,9 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
         ))?;
 
     
-    let redis = Arc::new(Mutex::new(RedisServer::new()));
+    let redis = Arc::new(RedisServer::new());
     
-    let mut reconstructor_redis=redis.lock().await;
+    // let mut reconstructor_redis=redis.data.write().await;;
     //for reconstruction from log file
     // let content=reconstructor_redis.ReadLog();
     // let mpa=reconstructor_redis.ReconstructLogFile(content);
@@ -35,7 +35,7 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
 
     // reconstructor_redis.ReadSnapShot()?;
 
-    drop(reconstructor_redis);
+    // drop(reconstructor_redis);
 
     println!("Server: running");
 
@@ -43,10 +43,12 @@ pub async fn Init(sender: Sender<u8>) -> Result<(), ServerError> {
         let (mut stream, client_addr) = socket.accept().await?;
         let (mut reader,writer)=stream.into_split();
         let redis_thread = Arc::clone(&redis);
-        let mut redis=redis_thread.lock().await;
-        redis.Clients.insert(client_addr, writer);
+        
+        redis.Clients
+        .write()
+        .await
+        .insert(client_addr, Arc::new(Mutex::new(writer)));
 
-        drop(redis);
         tokio::spawn(async move {
             if let Err(e) = HandleClient(redis_thread,&mut reader, client_addr).await {
                 
@@ -63,7 +65,7 @@ async fn CreateSocket() -> Result<TcpListener, ServerError> {
     Ok(socket)
 }
 
-async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut OwnedReadHalf,client_addr: core::net::SocketAddr) -> Result<(), ServerError> {
+async fn HandleClient(redis: Arc<RedisServer>,stream:&mut OwnedReadHalf,client_addr: core::net::SocketAddr) -> Result<(), ServerError> {
     loop {
         let mut buf_len = [0u8; 8];
 
@@ -79,15 +81,21 @@ async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut OwnedReadHalf,c
 
         let (redis_type, command) = Simplify(&buf)?;
         
-        match HandleType(&redis, redis_type.clone(), command.clone(),client_addr.clone()).await{
+        match HandleType(Arc::clone(&redis), redis_type.clone(), command.clone(),client_addr.clone()).await{
        
             Ok(Some(res)) => {
-                let mut redis = redis.lock().await;
+                
 
-                redis.WriteToLog(command.clone());
+                // persistenc::WriteToLog(command.clone());
 
-                let writer = redis.Clients.get_mut(&client_addr).unwrap();
+                let writer = {
+                    let writer_guard = redis.Clients.read().await;
 
+                    writer_guard
+                        .get(&client_addr)
+                        .cloned()
+                        .unwrap()
+                }; // writer_guard is dropped here
                 let mut response = Vec::with_capacity(1 + 8 + res.len());
 
                 response.push(1);
@@ -97,30 +105,35 @@ async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut OwnedReadHalf,c
 
                 response.extend_from_slice(&res);
 
-                writer.write_all(&response).await?;
+                writer.lock()
+                .await.write_all(&response).await?;
 
-                println!("Server: Operation was successful, sending response");
+                // println!("Server: Operation was successful, sending response");
 
-                drop(redis);
             }
 
             Ok(None) => {
                 if redis_type.trim()=="pubSub" {
                     
                 }else{
-                    let mut redis = redis.lock().await;
+                   
+                    // persistenc::WriteToLog(command.clone());
 
-                    redis.WriteToLog(command.clone());
+                    let writer = {
+                        let writer_guard = redis.Clients.read().await;
 
-                    let writer = redis.Clients.get_mut(&client_addr).unwrap();
-
+                        writer_guard
+                            .get(&client_addr)
+                            .cloned()
+                            .unwrap()
+                    }; // writer_guard is dropped here
                     let response = [1u8];
 
-                    writer.write_all(&response).await?;
+                    writer.lock().await.write_all(&response).await?;
 
-                    println!("Server: Operation was successful, no response data");
+                    // println!("Server: Operation was successful, no response data");
 
-                    drop(redis);
+                    
                 }
                 
             }
@@ -128,9 +141,15 @@ async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut OwnedReadHalf,c
             Err(e) => {
                 eprintln!("Client error: {}", e);
 
-                let mut redis = redis.lock().await;
+               
+                let writer = {
+                    let writer_guard = redis.Clients.read().await;
 
-                let writer = redis.Clients.get_mut(&client_addr).unwrap();
+                    writer_guard
+                        .get(&client_addr)
+                        .cloned()
+                        .unwrap()
+                }; // writer_guard is dropped here
 
                 let err = e.to_string();
                 let err_bytes = err.as_bytes();
@@ -145,19 +164,19 @@ async fn HandleClient(redis: Arc<Mutex<RedisServer>>,stream:&mut OwnedReadHalf,c
 
                 response.extend_from_slice(err_bytes);
 
-                writer.write_all(&response).await?;
+                writer.lock().await.write_all(&response).await?;
 
-                drop(redis);
+                
             }
         }       
         
         
-        {
-        let redis=redis.lock().await;
-        println!("Server: the map struct is {:?}",redis.data);
-        println!("Server: connected clients {:?}",redis.Clients);
-        println!("Server: channels {:?}",redis.Channels);
-        }   
+        // {
+        
+        // println!("Server: the map struct is {:?}",redis.data.read().await);
+        // println!("Server: connected clients {:?}",redis.Clients.read().await);
+        // println!("Server: channels {:?}",redis.Channels.read().await);
+        // }   
     }
 }
 
@@ -227,29 +246,29 @@ fn Simplify(operation: &[u8]) -> Result<(String, String), ServerError> {
     Ok((redis_type, command))
 }
 
-async fn HandleType(redis: &Arc<Mutex<RedisServer>>,redis_type: String,command: String,client_addr: core::net::SocketAddr) -> Result<Option<Vec<u8>>, ServerError> {
-    let mut redis:MutexGuard<'_, RedisServer>=redis.lock().await;
+async fn HandleType(redis: Arc<RedisServer>,redis_type: String,command: String,client_addr: core::net::SocketAddr) -> Result<Option<Vec<u8>>, ServerError> {
+    
     match redis_type.trim() {
         "string" => {
-            HandleStringOp(&mut redis, command, String::from("string")).await
+            HandleStringOp(redis, command, String::from("string")).await
         }
 
         "list" => {
-            HandleListOp(&mut redis, command, String::from("list")).await
+            HandleListOp(redis, command, String::from("list")).await
         }
 
         "hash" => {
-            HandleHashOp(&mut redis, command, String::from("hash")).await
+            HandleHashOp( redis, command, String::from("hash")).await
         }
 
         "set" => {
-            HandleSetOp(&mut redis, command, String::from("set")).await
+            HandleSetOp( redis, command, String::from("set")).await
         }
         "transaction"=>{
-            transactions::HandleTransactions(&mut redis, command).await
+            transactions::HandleTransactions(redis, command).await
         }
         "pubSub"=>{
-            pubSub::HandlePubSub(&mut redis, command,client_addr).await
+            pubSub::HandlePubSub(redis, command,client_addr).await
 
             
         }
@@ -268,7 +287,39 @@ async fn HandleType(redis: &Arc<Mutex<RedisServer>>,redis_type: String,command: 
     
 }
 
-pub async fn HandleStringOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
+
+
+// ============================================================
+// Helper: get the RedisValue Arc without holding the map lock
+// ============================================================
+
+async fn get_value(
+    redis: &Arc<RedisServer>,
+    key: &[u8],
+) -> Result<Arc<RwLock<RedisValue>>, ServerError> {
+    let map_guard = redis.data.read().await;
+
+    map_guard
+        .get(key)
+        .cloned()
+        .ok_or_else(|| {
+            ServerError::NoRedisKey(
+                String::from_utf8_lossy(key).to_string(),
+            )
+        })
+}
+
+
+// ============================================================
+// STRING
+// ============================================================
+
+pub async fn HandleStringOp(
+    redis: Arc<RedisServer>,
+    command: String,
+    _t: String,
+) -> Result<Option<Vec<u8>>, ServerError> {
+
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -288,95 +339,91 @@ pub async fn HandleStringOp(redis: &mut MutexGuard<'_, RedisServer>,command: Str
         })?;
 
     match command_name {
+
+        // ----------------------------------------------------
+        // set key value
+        // ----------------------------------------------------
+
         "set" => {
             if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SET requires a key and value".to_string(),
+                    "set requires a key and value".to_string(),
                 ));
             }
 
             let key = command.remove(1);
             let value = command.remove(1);
 
-            
-
-            redis.create_string(key, value);
+            redis.create_string(key, value).await;
 
             Ok(None)
         }
 
+        // ----------------------------------------------------
+        // get key
+        // ----------------------------------------------------
+
         "get" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "GET requires a key".to_string(),
+                    "get requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
+            let value_guard = value_lock.read().await;
 
-            let redis_string = GetRedisStingRef(redis_value)?;
+            let redis_string = GetRedisStringRef(&value_guard)?;
 
-            let value = redis_string.get().to_vec();
-
-            Ok(Some(value))
+            Ok(Some(redis_string.get().to_vec()))
         }
+
+        // ----------------------------------------------------
+        // append key value
+        // ----------------------------------------------------
 
         "append" => {
             if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "APPEND requires a key and value".to_string(),
+                    "append requires a key and value".to_string(),
                 ));
             }
 
             let key = command.remove(1);
             let append = command.remove(1);
 
-            
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_string = GetRedisSting(redis_value)?;
+            let mut value_guard = value_lock.write().await;
+
+            let redis_string = GetRedisString(&mut value_guard)?;
 
             redis_string.append(&append);
 
             Ok(None)
         }
 
+        // ----------------------------------------------------
+        // len key
+        // ----------------------------------------------------
+
         "len" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "LEN requires a key".to_string(),
+                    "len requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
+            let value_guard = value_lock.read().await;
 
-            let redis_string = GetRedisStingRef(redis_value)?;
+            let redis_string = GetRedisStringRef(&value_guard)?;
 
             let len = (redis_string.len() as u64)
                 .to_be_bytes()
@@ -387,324 +434,23 @@ pub async fn HandleStringOp(redis: &mut MutexGuard<'_, RedisServer>,command: Str
 
         _ => {
             Err(ServerError::InvalidRedisCommand(
-                format!("Command {} not recognized", command_name),
-            ))
-        }
-    }
-    
-}
-
-fn GetRedisSting(value: &mut RedisValue) -> Result<&mut RedisString, ServerError> {
-    match value {
-        RedisValue::String(string) => Ok(string),
-
-        _ => Err(ServerError::InvalidRedisType(
-            "Redis key does not contain a string".to_string(),
-        )),
-    }
-}
-
-fn GetRedisStingRef(value: &RedisValue) -> Result<&RedisString, ServerError> {
-    match value {
-        RedisValue::String(string) => Ok(string),
-
-        _ => Err(ServerError::InvalidRedisType(
-            "Redis key does not contain a string".to_string(),
-        )),
-    }
-}
-
-pub async fn HandleListOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
-    let mut command: Vec<Vec<u8>> = command
-        .split_whitespace()
-        .map(|word| word.as_bytes().to_vec())
-        .collect();
-
-    if command.is_empty() {
-        return Err(ServerError::InvalidRedisCommand(
-            "No Redis command provided".to_string(),
-        ));
-    }
-
-    let command_name = std::str::from_utf8(&command[0])
-        .map_err(|_| ServerError::InvalidRedisCommand(
-            "Redis command contains invalid UTF-8".to_string(),
-        ))?;
-
-    match command_name {
-        "lcreate" => {
-            if command.len() < 2 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "LCREATE requires a key".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-
-            
-                
-
-            redis.create_list(key);
-
-            Ok(None)
-        }
-
-        "lpush" => {
-            if command.len() < 3 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "LPUSH requires a key and value".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-            let value = command.remove(1);
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            redis_list.push_front(value);
-
-            Ok(None)
-        }
-
-        "rpush" => {
-            if command.len() < 3 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "RPUSH requires a key and value".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-            let value = command.remove(1);
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            redis_list.push_back(value);
-
-            Ok(None)
-        }
-
-        "lpop" => {
-            if command.len() < 2 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "LPOP requires a key".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            match redis_list.pop_front() {
-                Some(value) => Ok(Some(value)),
-                None => Ok(None),
-            }
-        }
-
-        "rpop" => {
-            if command.len() < 2 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "RPOP requires a key".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            match redis_list.pop_back() {
-                Some(value) => Ok(Some(value)),
-                None => Ok(None),
-            }
-        }
-
-        "llen" => {
-            if command.len() < 2 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "LLEN requires a key".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            let len = (redis_list.len() as u64)
-                .to_be_bytes()
-                .to_vec();
-
-            Ok(Some(len))
-        }
-
-        "lindex" => {
-            if command.len() < 3 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "LINDEX requires a key and index".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-            let value = command.remove(1);
-
-            let index: usize = String::from_utf8(value)
-                .map_err(|_| ServerError::InvalidRedisCommand(
-                    "LINDEX index contains invalid UTF-8".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| ServerError::InvalidRedisCommand(
-                    "LINDEX index must be a valid number".to_string(),
-                ))?;
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            let element = redis_list
-                .get(index)
-                .ok_or_else(|| ServerError::InvalidRedisCommand(
-                    "List index out of bounds".to_string(),
-                ))?;
-
-            Ok(Some(element.clone()))
-        }
-
-        "lset" => {
-            if command.len() < 4 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "LSET requires a key, index and value".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-            let value_index = command.remove(1);
-            let new_value = command.remove(1);
-
-            let index: usize = String::from_utf8(value_index)
-                .map_err(|_| ServerError::InvalidRedisCommand(
-                    "LSET index contains invalid UTF-8".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| ServerError::InvalidRedisCommand(
-                    "LSET index must be a valid number".to_string(),
-                ))?;
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            if index >= redis_list.len() {
-                return Err(ServerError::InvalidRedisCommand(
-                    "List index out of bounds".to_string(),
-                ));
-            }
-
-            redis_list.set(index, new_value);
-
-            Ok(None)
-        }
-
-        "lclear" => {
-            if command.len() < 2 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "LCLEAR requires a key".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-
-            
-                
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string()
-                ))?;
-
-            let redis_list = GetRedisList(redis_value)?;
-
-            redis_list.clear();
-
-            Ok(None)
-        }
-
-        _ => {
-            Err(ServerError::InvalidRedisCommand(
-                format!("Command {} not recognized", command_name),
+                format!("command {} not recognized", command_name),
             ))
         }
     }
 }
 
-fn GetRedisList(value: &mut RedisValue) -> Result<&mut RedisList, ServerError> {
-    match value {
-        RedisValue::List(list) => Ok(list),
 
-        _ => Err(ServerError::InvalidRedisType(
-            "Redis key does not contain a list".to_string(),
-        )),
-    }
-}
+// ============================================================
+// LIST
+// ============================================================
 
-pub async fn HandleHashOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
+pub async fn HandleListOp(
+    redis: Arc<RedisServer>,
+    command: String,
+    _t: String,
+) -> Result<Option<Vec<u8>>, ServerError> {
+
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -724,289 +470,277 @@ pub async fn HandleHashOp(redis: &mut MutexGuard<'_, RedisServer>,command: Strin
         })?;
 
     match command_name {
-        "hcreate" => {
+
+        // ----------------------------------------------------
+        // lcreate key
+        // ----------------------------------------------------
+
+        "lcreate" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "HCREATE requires a key".to_string(),
+                    "lcreate requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
-
-            redis.create_hash(key);
+            redis.create_list(key).await;
 
             Ok(None)
         }
 
-        "hset" => {
-            if command.len() < 4 {
+        // ----------------------------------------------------
+        // lpush key value
+        // ----------------------------------------------------
+
+        "lpush" => {
+            if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "HSET requires a key, field and value".to_string(),
+                    "lpush requires a key and value".to_string(),
                 ));
             }
 
             let key = command.remove(1);
-            let field = command.remove(1);
             let value = command.remove(1);
 
-            
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
+            let mut value_guard = value_lock.write().await;
 
-            let redis_hash = GetRedisHash(redis_value)?;
+            let redis_list = GetRedisList(&mut value_guard)?;
 
-            redis_hash.set(field, value);
+            redis_list.push_front(value);
 
             Ok(None)
         }
 
-        "hget" => {
+        // ----------------------------------------------------
+        // rpush key value
+        // ----------------------------------------------------
+
+        "rpush" => {
             if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "HGET requires a key and field".to_string(),
+                    "rpush requires a key and value".to_string(),
                 ));
             }
 
             let key = command.remove(1);
-            let field = command.remove(1);
+            let value = command.remove(1);
 
-            
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
+            let mut value_guard = value_lock.write().await;
 
-            let redis_hash = GetRedisHashRef(redis_value)?;
+            let redis_list = GetRedisList(&mut value_guard)?;
 
-            let value = redis_hash
-                .get(&field)
-                .ok_or_else(|| {
-                    ServerError::InvalidRedisCommand(
-                        "Hash field does not exist".to_string(),
-                    )
-                })?;
-
-            Ok(Some(value.to_vec()))
-        }
-
-        "hexists" => {
-            if command.len() < 3 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "HEXISTS requires a key and field".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-            let field = command.remove(1);
-
-            
-                ;
-
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
-
-            let redis_hash = GetRedisHashRef(redis_value)?;
-
-            let exists = redis_hash.exists(&field);
-
-            Ok(Some(vec![exists as u8]))
-        }
-
-        "hdel" => {
-            if command.len() < 3 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "HDEL requires a key and field".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-            let field = command.remove(1);
-
-            
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
-
-            let redis_hash = GetRedisHash(redis_value)?;
-
-            redis_hash.remove(&field);
+            redis_list.push_back(value);
 
             Ok(None)
         }
 
-        "hlen" => {
+        // ----------------------------------------------------
+        // lpop key
+        // ----------------------------------------------------
+
+        "lpop" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "HLEN requires a key".to_string(),
+                    "lpop requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
+            let mut value_guard = value_lock.write().await;
 
-            let redis_hash = GetRedisHashRef(redis_value)?;
+            let redis_list = GetRedisList(&mut value_guard)?;
 
-            let len = (redis_hash.len() as u64)
+            Ok(redis_list.pop_front())
+        }
+
+        // ----------------------------------------------------
+        // rpop key
+        // ----------------------------------------------------
+
+        "rpop" => {
+            if command.len() < 2 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "rpop requires a key".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let mut value_guard = value_lock.write().await;
+
+            let redis_list = GetRedisList(&mut value_guard)?;
+
+            Ok(redis_list.pop_back())
+        }
+
+        // ----------------------------------------------------
+        // llen key
+        // ----------------------------------------------------
+
+        "llen" => {
+            if command.len() < 2 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "llen requires a key".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let value_guard = value_lock.read().await;
+
+            let redis_list = GetRedisListRef(&value_guard)?;
+
+            let len = (redis_list.len() as u64)
                 .to_be_bytes()
                 .to_vec();
 
             Ok(Some(len))
         }
 
-        "hclear" => {
-            if command.len() < 2 {
+        // ----------------------------------------------------
+        // lindex key index
+        // ----------------------------------------------------
+
+        "lindex" => {
+            if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "HCLEAR requires a key".to_string(),
+                    "lindex requires a key and index".to_string(),
                 ));
             }
 
             let key = command.remove(1);
+            let index_bytes = command.remove(1);
 
-            
-
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
+            let index: usize = String::from_utf8(index_bytes)
+                .map_err(|_| {
+                    ServerError::InvalidRedisCommand(
+                        "lindex index contains invalid UTF-8".to_string(),
+                    )
+                })?
+                .parse()
+                .map_err(|_| {
+                    ServerError::InvalidRedisCommand(
+                        "lindex index must be a valid number".to_string(),
                     )
                 })?;
 
-            let redis_hash = GetRedisHash(redis_value)?;
+            let value_lock = get_value(&redis, &key).await?;
 
-            redis_hash.clear();
+            let value_guard = value_lock.read().await;
+
+            let redis_list = GetRedisListRef(&value_guard)?;
+
+            let element = redis_list
+                .get(index)
+                .ok_or_else(|| {
+                    ServerError::InvalidRedisCommand(
+                        "list index out of bounds".to_string(),
+                    )
+                })?;
+
+            Ok(Some(element.clone()))
+        }
+
+        // ----------------------------------------------------
+        // lset key index value
+        // ----------------------------------------------------
+
+        "lset" => {
+            if command.len() < 4 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "lset requires a key, index and value".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+            let index_bytes = command.remove(1);
+            let new_value = command.remove(1);
+
+            let index: usize = String::from_utf8(index_bytes)
+                .map_err(|_| {
+                    ServerError::InvalidRedisCommand(
+                        "lset index contains invalid UTF-8".to_string(),
+                    )
+                })?
+                .parse()
+                .map_err(|_| {
+                    ServerError::InvalidRedisCommand(
+                        "lset index must be a valid number".to_string(),
+                    )
+                })?;
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let mut value_guard = value_lock.write().await;
+
+            let redis_list = GetRedisList(&mut value_guard)?;
+
+            if index >= redis_list.len() {
+                return Err(ServerError::InvalidRedisCommand(
+                    "list index out of bounds".to_string(),
+                ));
+            }
+
+            redis_list.set(index, new_value);
 
             Ok(None)
         }
 
-        "hkeys" => {
+        // ----------------------------------------------------
+        // lclear key
+        // ----------------------------------------------------
+
+        "lclear" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "HKEYS requires a key".to_string(),
+                    "lclear requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
+            let mut value_guard = value_lock.write().await;
 
-            let redis_hash = GetRedisHashRef(redis_value)?;
+            let redis_list = GetRedisList(&mut value_guard)?;
 
-            let keys = redis_hash.keys();
+            redis_list.clear();
 
-            let mut result = Vec::new();
-
-            for key in keys {
-                let len = (key.len() as u64).to_be_bytes();
-                result.extend_from_slice(&len);
-                result.extend_from_slice(&key);
-            }
-
-            Ok(Some(result))
-        }
-
-        "hvalues" => {
-            if command.len() < 2 {
-                return Err(ServerError::InvalidRedisCommand(
-                    "HVALUES requires a key".to_string(),
-                ));
-            }
-
-            let key = command.remove(1);
-
-            
-
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| {
-                    ServerError::NoRedisKey(
-                        String::from_utf8_lossy(&key).to_string(),
-                    )
-                })?;
-
-            let redis_hash = GetRedisHashRef(redis_value)?;
-
-            let values = redis_hash.values();
-
-            let mut result = Vec::new();
-
-            for value in values {
-                let len = (value.len() as u64).to_be_bytes();
-                result.extend_from_slice(&len);
-                result.extend_from_slice(&value);
-            }
-
-            Ok(Some(result))
+            Ok(None)
         }
 
         _ => {
             Err(ServerError::InvalidRedisCommand(
-                format!("Command {} not recognized", command_name),
+                format!("command {} not recognized", command_name),
             ))
         }
     }
 }
 
-fn GetRedisHash(value: &mut RedisValue) -> Result<&mut RedisHash, ServerError> {
-    match value {
-        RedisValue::Hash(hash) => Ok(hash),
 
-        _ => Err(ServerError::InvalidRedisType(
-            "Redis key does not contain a hash".to_string(),
-        )),
-    }
-}
+// ============================================================
+// HASH
+// ============================================================
 
-fn GetRedisHashRef(value: &RedisValue) -> Result<&RedisHash, ServerError> {
-    match value {
-        RedisValue::Hash(hash) => Ok(hash),
+pub async fn HandleHashOp(
+    redis: Arc<RedisServer>,
+    command: String,
+    _t: String,
+) -> Result<Option<Vec<u8>>, ServerError> {
 
-        _ => Err(ServerError::InvalidRedisType(
-            "Redis key does not contain a hash".to_string(),
-        )),
-    }
-}
-
-pub async fn HandleSetOp(redis: &mut MutexGuard<'_, RedisServer>,command: String,t: String) -> Result<Option<Vec<u8>>, ServerError> {
     let mut command: Vec<Vec<u8>> = command
         .split_whitespace()
         .map(|word| word.as_bytes().to_vec())
@@ -1019,126 +753,407 @@ pub async fn HandleSetOp(redis: &mut MutexGuard<'_, RedisServer>,command: String
     }
 
     let command_name = std::str::from_utf8(&command[0])
-        .map_err(|_| ServerError::InvalidRedisCommand(
-            "Redis command contains invalid UTF-8".to_string(),
-        ))?;
+        .map_err(|_| {
+            ServerError::InvalidRedisCommand(
+                "Redis command contains invalid UTF-8".to_string(),
+            )
+        })?;
 
     match command_name {
-        "screate" => {
+
+        // ----------------------------------------------------
+        // hcreate key
+        // ----------------------------------------------------
+
+        "hcreate" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SCREATE requires a key".to_string(),
+                    "hcreate requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
-                
-
-            redis.create_set(key);
+            redis.create_hash(key).await;
 
             Ok(None)
         }
 
+        // ----------------------------------------------------
+        // hset key field value
+        // ----------------------------------------------------
+
+        "hset" => {
+            if command.len() < 4 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hset requires a key, field and value".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+            let field = command.remove(1);
+            let value = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let mut value_guard = value_lock.write().await;
+
+            let redis_hash = GetRedisHash(&mut value_guard)?;
+
+            redis_hash.set(field, value);
+
+            Ok(None)
+        }
+
+        // ----------------------------------------------------
+        // hget key field
+        // ----------------------------------------------------
+
+        "hget" => {
+            if command.len() < 3 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hget requires a key and field".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+            let field = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let value_guard = value_lock.read().await;
+
+            let redis_hash = GetRedisHashRef(&value_guard)?;
+
+            let value = redis_hash
+                .get(&field)
+                .ok_or_else(|| {
+                    ServerError::InvalidRedisCommand(
+                        "hash field does not exist".to_string(),
+                    )
+                })?;
+
+            Ok(Some(value.to_vec()))
+        }
+
+        // ----------------------------------------------------
+        // hexists key field
+        // ----------------------------------------------------
+
+        "hexists" => {
+            if command.len() < 3 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hexists requires a key and field".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+            let field = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let value_guard = value_lock.read().await;
+
+            let redis_hash = GetRedisHashRef(&value_guard)?;
+
+            let exists = redis_hash.exists(&field);
+
+            Ok(Some(vec![exists as u8]))
+        }
+
+        // ----------------------------------------------------
+        // hdel key field
+        // ----------------------------------------------------
+
+        "hdel" => {
+            if command.len() < 3 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hdel requires a key and field".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+            let field = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let mut value_guard = value_lock.write().await;
+
+            let redis_hash = GetRedisHash(&mut value_guard)?;
+
+            redis_hash.remove(&field);
+
+            Ok(None)
+        }
+
+        // ----------------------------------------------------
+        // hlen key
+        // ----------------------------------------------------
+
+        "hlen" => {
+            if command.len() < 2 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hlen requires a key".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let value_guard = value_lock.read().await;
+
+            let redis_hash = GetRedisHashRef(&value_guard)?;
+
+            let len = (redis_hash.len() as u64)
+                .to_be_bytes()
+                .to_vec();
+
+            Ok(Some(len))
+        }
+
+        // ----------------------------------------------------
+        // hclear key
+        // ----------------------------------------------------
+
+        "hclear" => {
+            if command.len() < 2 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hclear requires a key".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let mut value_guard = value_lock.write().await;
+
+            let redis_hash = GetRedisHash(&mut value_guard)?;
+
+            redis_hash.clear();
+
+            Ok(None)
+        }
+
+        // ----------------------------------------------------
+        // hkeys key
+        // ----------------------------------------------------
+
+        "hkeys" => {
+            if command.len() < 2 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hkeys requires a key".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let value_guard = value_lock.read().await;
+
+            let redis_hash = GetRedisHashRef(&value_guard)?;
+
+            let keys = redis_hash.keys();
+
+            let mut result = Vec::new();
+
+            for key in keys {
+                result.extend_from_slice(
+                    &(key.len() as u64).to_be_bytes()
+                );
+
+                result.extend_from_slice(&key);
+            }
+
+            Ok(Some(result))
+        }
+
+        // ----------------------------------------------------
+        // hvalues key
+        // ----------------------------------------------------
+
+        "hvalues" => {
+            if command.len() < 2 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "hvalues requires a key".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+
+            let value_lock = get_value(&redis, &key).await?;
+
+            let value_guard = value_lock.read().await;
+
+            let redis_hash = GetRedisHashRef(&value_guard)?;
+
+            let values = redis_hash.values();
+
+            let mut result = Vec::new();
+
+            for value in values {
+                result.extend_from_slice(
+                    &(value.len() as u64).to_be_bytes()
+                );
+
+                result.extend_from_slice(&value);
+            }
+
+            Ok(Some(result))
+        }
+
+        _ => {
+            Err(ServerError::InvalidRedisCommand(
+                format!("command {} not recognized", command_name),
+            ))
+        }
+    }
+}
+
+
+// ============================================================
+// SET
+// ============================================================
+
+pub async fn HandleSetOp(
+    redis: Arc<RedisServer>,
+    command: String,
+    _t: String,
+) -> Result<Option<Vec<u8>>, ServerError> {
+
+    let mut command: Vec<Vec<u8>> = command
+        .split_whitespace()
+        .map(|word| word.as_bytes().to_vec())
+        .collect();
+
+    if command.is_empty() {
+        return Err(ServerError::InvalidRedisCommand(
+            "No Redis command provided".to_string(),
+        ));
+    }
+
+    let command_name = std::str::from_utf8(&command[0])
+        .map_err(|_| {
+            ServerError::InvalidRedisCommand(
+                "Redis command contains invalid UTF-8".to_string(),
+            )
+        })?;
+
+    match command_name {
+
+        // ----------------------------------------------------
+        // screate key
+        // ----------------------------------------------------
+
+        "screate" => {
+            if command.len() < 2 {
+                return Err(ServerError::InvalidRedisCommand(
+                    "screate requires a key".to_string(),
+                ));
+            }
+
+            let key = command.remove(1);
+
+            redis.create_set(key).await;
+
+            Ok(None)
+        }
+
+        // ----------------------------------------------------
+        // sadd key value
+        // ----------------------------------------------------
+
         "sadd" => {
             if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SADD requires a key and value".to_string(),
+                    "sadd requires a key and value".to_string(),
                 ));
             }
 
             let key = command.remove(1);
             let value = command.remove(1);
 
-            
-                
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string(),
-                ))?;
+            let mut value_guard = value_lock.write().await;
 
-            let redis_set = GetRedisSet(redis_value)?;
+            let redis_set = GetRedisSet(&mut value_guard)?;
 
             redis_set.add(value);
 
             Ok(None)
         }
 
+        // ----------------------------------------------------
+        // srem key value
+        // ----------------------------------------------------
+
         "srem" => {
             if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SREM requires a key and value".to_string(),
+                    "srem requires a key and value".to_string(),
                 ));
             }
 
             let key = command.remove(1);
             let value = command.remove(1);
 
-            
-                
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string(),
-                ))?;
+            let mut value_guard = value_lock.write().await;
 
-            let redis_set = GetRedisSet(redis_value)?;
+            let redis_set = GetRedisSet(&mut value_guard)?;
 
             redis_set.remove(&value);
 
             Ok(None)
         }
 
+        // ----------------------------------------------------
+        // scontains key value
+        // ----------------------------------------------------
+
         "scontains" => {
             if command.len() < 3 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SCONTAINS requires a key and value".to_string(),
+                    "scontains requires a key and value".to_string(),
                 ));
             }
 
             let key = command.remove(1);
             let value = command.remove(1);
 
-            
-                
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string(),
-                ))?;
+            let value_guard = value_lock.read().await;
 
-            let redis_set = GetRedisSetRef(redis_value)?;
+            let redis_set = GetRedisSetRef(&value_guard)?;
 
             let contains = redis_set.contains(&value);
 
-            // 1 = true, 0 = false
             Ok(Some(vec![contains as u8]))
         }
+
+        // ----------------------------------------------------
+        // slen key
+        // ----------------------------------------------------
 
         "slen" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SLEN requires a key".to_string(),
+                    "slen requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
-                
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string(),
-                ))?;
+            let value_guard = value_lock.read().await;
 
-            let redis_set = GetRedisSetRef(redis_value)?;
+            let redis_set = GetRedisSetRef(&value_guard)?;
 
             let len = (redis_set.len() as u64)
                 .to_be_bytes()
@@ -1147,55 +1162,51 @@ pub async fn HandleSetOp(redis: &mut MutexGuard<'_, RedisServer>,command: String
             Ok(Some(len))
         }
 
+        // ----------------------------------------------------
+        // sclear key
+        // ----------------------------------------------------
+
         "sclear" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SCLEAR requires a key".to_string(),
+                    "sclear requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
-                
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get_mut(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string(),
-                ))?;
+            let mut value_guard = value_lock.write().await;
 
-            let redis_set = GetRedisSet(redis_value)?;
+            let redis_set = GetRedisSet(&mut value_guard)?;
 
             redis_set.clear();
 
             Ok(None)
         }
 
+        // ----------------------------------------------------
+        // svalues key
+        // ----------------------------------------------------
+
         "svalues" => {
             if command.len() < 2 {
                 return Err(ServerError::InvalidRedisCommand(
-                    "SVALUES requires a key".to_string(),
+                    "svalues requires a key".to_string(),
                 ));
             }
 
             let key = command.remove(1);
 
-            
-                
+            let value_lock = get_value(&redis, &key).await?;
 
-            let redis_value = redis.data
-                .get(&key)
-                .ok_or_else(|| ServerError::NoRedisKey(
-                    String::from_utf8_lossy(&key).to_string(),
-                ))?;
+            let value_guard = value_lock.read().await;
 
-            let redis_set = GetRedisSetRef(redis_value)?;
+            let redis_set = GetRedisSetRef(&value_guard)?;
 
             let values = redis_set.values();
 
-            // Serialize:
-            // [number of values][value length][value][value length][value]...
             let mut result = Vec::new();
 
             result.extend_from_slice(
@@ -1215,13 +1226,117 @@ pub async fn HandleSetOp(redis: &mut MutexGuard<'_, RedisServer>,command: String
 
         _ => {
             Err(ServerError::InvalidRedisCommand(
-                format!("Command {} not recognized", command_name),
+                format!("command {} not recognized", command_name),
             ))
         }
     }
 }
 
-fn GetRedisSet(value: &mut RedisValue) -> Result<&mut RedisSet, ServerError> {
+
+// ============================================================
+// STRING HELPERS
+// ============================================================
+
+fn GetRedisString(
+    value: &mut RedisValue,
+) -> Result<&mut RedisString, ServerError> {
+
+    match value {
+        RedisValue::String(string) => Ok(string),
+
+        _ => Err(ServerError::InvalidRedisType(
+            "Redis key does not contain a string".to_string(),
+        )),
+    }
+}
+
+
+fn GetRedisStringRef(
+    value: &RedisValue,
+) -> Result<&RedisString, ServerError> {
+
+    match value {
+        RedisValue::String(string) => Ok(string),
+
+        _ => Err(ServerError::InvalidRedisType(
+            "Redis key does not contain a string".to_string(),
+        )),
+    }
+}
+
+
+// ============================================================
+// LIST HELPERS
+// ============================================================
+
+fn GetRedisList(
+    value: &mut RedisValue,
+) -> Result<&mut RedisList, ServerError> {
+
+    match value {
+        RedisValue::List(list) => Ok(list),
+
+        _ => Err(ServerError::InvalidRedisType(
+            "Redis key does not contain a list".to_string(),
+        )),
+    }
+}
+
+
+fn GetRedisListRef(
+    value: &RedisValue,
+) -> Result<&RedisList, ServerError> {
+
+    match value {
+        RedisValue::List(list) => Ok(list),
+
+        _ => Err(ServerError::InvalidRedisType(
+            "Redis key does not contain a list".to_string(),
+        )),
+    }
+}
+
+
+// ============================================================
+// HASH HELPERS
+// ============================================================
+
+fn GetRedisHash(
+    value: &mut RedisValue,
+) -> Result<&mut RedisHash, ServerError> {
+
+    match value {
+        RedisValue::Hash(hash) => Ok(hash),
+
+        _ => Err(ServerError::InvalidRedisType(
+            "Redis key does not contain a hash".to_string(),
+        )),
+    }
+}
+
+
+fn GetRedisHashRef(
+    value: &RedisValue,
+) -> Result<&RedisHash, ServerError> {
+
+    match value {
+        RedisValue::Hash(hash) => Ok(hash),
+
+        _ => Err(ServerError::InvalidRedisType(
+            "Redis key does not contain a hash".to_string(),
+        )),
+    }
+}
+
+
+// ============================================================
+// SET HELPERS
+// ============================================================
+
+fn GetRedisSet(
+    value: &mut RedisValue,
+) -> Result<&mut RedisSet, ServerError> {
+
     match value {
         RedisValue::Set(set) => Ok(set),
 
@@ -1231,7 +1346,11 @@ fn GetRedisSet(value: &mut RedisValue) -> Result<&mut RedisSet, ServerError> {
     }
 }
 
-fn GetRedisSetRef(value: &RedisValue) -> Result<&RedisSet, ServerError> {
+
+fn GetRedisSetRef(
+    value: &RedisValue,
+) -> Result<&RedisSet, ServerError> {
+
     match value {
         RedisValue::Set(set) => Ok(set),
 
